@@ -3,7 +3,6 @@ defmodule Pipeline do
   Módulo principal que orquestra toda a compilação.
   """
 
-  alias Core.AST.{Identifier, List, Module}
   alias Core.Env
 
   def run(source, opts \\ []) do
@@ -11,7 +10,7 @@ defmodule Pipeline do
     env = Keyword.get(opts, :env, Env.new())
 
     with {:ok, forms} <- parse(source),
-         {:ok, modules} <- identify_modules(forms) do
+         {:ok, modules} <- Midfield.ModuleManager.identify_modules(forms) do
       {:ok, Enum.map(modules, &compile_module(&1, mode, env)), env}
     end
   end
@@ -24,30 +23,6 @@ defmodule Pipeline do
     result
   end
 
-  @doc "Divide as formas do parser em módulos; sobras viram :__main__."
-  def identify_modules(forms) do
-    {inner_modules_raw, loose_expressions} = Enum.split_with(forms, &def_module?/1)
-
-    inner_modules =
-      Enum.map(
-        inner_modules_raw,
-        fn %List{elements: [_kw, %Identifier{name: name} | body], meta: meta} ->
-          %Module{name: name, body: body, meta: meta}
-        end
-      )
-
-    modules =
-      case loose_expressions do
-        [] ->
-          inner_modules
-
-        _ ->
-          inner_modules ++ [%Module{name: :__main__, body: loose_expressions, meta: %{line: 0}}]
-      end
-
-    {:ok, modules}
-  end
-
   # --  Helpers
 
   defp parse(source) do
@@ -56,9 +31,6 @@ defmodule Pipeline do
       {:ok, forms}
     end
   end
-
-  defp def_module?(%List{elements: [%Identifier{name: :"def-module"} | _]}), do: true
-  defp def_module?(_), do: false
 
   defp run_backend(:interpret, ast, env), do: Backend.Interpreter.run(ast, env)
   defp run_backend(:compile, ast, env), do: Backend.CodeGen.run(ast, env)

@@ -14,7 +14,7 @@ defmodule PipelineTest do
   defp build!(code) do
     {:ok, tokens} = Parser.Lexer.run(code)
     {:ok, forms} = Parser.SyntaxAnalyzer.run(tokens)
-    {:ok, modules} = Pipeline.identify_modules(forms)
+    {:ok, modules} = Midfield.ModuleManager.identify_modules(forms)
     base = Core.Env.new()
 
     Enum.map(modules, fn module ->
