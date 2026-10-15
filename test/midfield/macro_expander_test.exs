@@ -72,6 +72,19 @@ defmodule Midfield.MacroExpanderTests do
 
       assert {%AST.Quote{body: %AST.List{}}, _env} = MacroExpander.expand(ast, env)
     end
+
+    test "import is pruned and registered in Env" do
+      env = Env.new(macro_engine: :interpreter)
+
+      assert {nil, env} = MacroExpander.expand(lst([id(:import), id(:foo)]), env)
+      assert env.imports == [:foo]
+
+      assert {nil, env} =
+               MacroExpander.expand(lst([id(:import), id(:bar), id(:as), id(:b)]), env)
+
+      assert env.aliases[:b] == :bar
+      assert env.imports == [:foo]
+    end
   end
 
   describe "Backend Integration" do

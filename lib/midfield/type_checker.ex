@@ -30,10 +30,14 @@ defmodule Midfield.TypeChecker do
   def run(ast, env) do
     env = add_builtin_names(env)
 
-    with {:ok, checked_env} <- check(ast, env, :module) do
-      {:ok, ast, checked_env}
+    case check(ast, env, :module) do
+      {:ok, checked_env} -> {:ok, ast, checked_env}
+      {:error, message} -> {:error, with_file(message, env)}
     end
   end
+
+  defp with_file(message, %{file: nil}), do: message
+  defp with_file(message, %{file: file}), do: "#{file}: #{message}"
 
   defp add_builtin_names(env) do
     env =
@@ -111,14 +115,14 @@ defmodule Midfield.TypeChecker do
       name.name in @reserved_names ->
         error("identificador reservado #{name.name}", name.meta)
 
-      Map.has_key?(env.vars, name.name) ->
+      Map.has_key?(env.defs, {env.current_module, name.name}) ->
         error("declaração duplicada de #{name.name}", name.meta)
 
       Env.has_type?(env, name.name) ->
         error("nome de variável coincide com tipo: #{name.name}", name.meta)
 
       true ->
-        signature = Map.get(env.types, {:spec, name.name})
+        signature = Env.get_type(env, {:spec, name.name})
         binding = binding_with_signature(binding_for(value, env), signature)
 
         # A função pode referir-se ao próprio nome no corpo, mas o vínculo
@@ -126,14 +130,14 @@ defmodule Midfield.TypeChecker do
         value_env =
           case value do
             %List{elements: [%Identifier{name: :fn}, %Tuple{} | _]} ->
-              Env.new(env) |> Env.put_var(name.name, binding)
+              Env.new(env) |> Env.put_def(name.name, binding)
 
             _ ->
               env
           end
 
         with {:ok, _} <- check_declared_value(value, value_env, signature, name.meta) do
-          {:ok, Env.put_var(env, name.name, binding)}
+          {:ok, Env.put_def(env, name.name, binding)}
         end
     end
   end
@@ -423,7 +427,7 @@ defmodule Midfield.TypeChecker do
       name.name in @reserved_names ->
         error("identificador reservado #{name.name}", name.meta)
 
-      Map.has_key?(env.vars, name.name) ->
+      Map.has_key?(env.defs, {env.current_module, name.name}) ->
         error("spec de #{name.name} deve vir antes do def", name.meta)
 
       true ->

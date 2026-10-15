@@ -6,7 +6,7 @@ defmodule Midfield.MacroExpander do
   """
   alias Core.Env
   alias Core.AST
-  alias Core.AST.{List, Identifier, Tuple}
+  alias Core.AST.{List, Identifier, Literal, Tuple}
 
   def run(%AST.Module{body: trees} = root, env) do
     {expanded_trees, final_env} = expand_list(trees, env)
@@ -73,6 +73,31 @@ defmodule Midfield.MacroExpander do
     }
 
     {unquoted_node, new_env}
+  end
+
+  def expand(%List{elements: [%Identifier{name: :import}, %Identifier{name: mod}]}, env) do
+    {nil, Env.import_module(env, mod)}
+  end
+
+  def expand(
+        %List{elements: [%Identifier{name: :import}, %Literal{type: :Str, value: path} | _]},
+        _env
+      ) do
+    raise "import por caminho só no topo do módulo: #{path}"
+  end
+
+  def expand(
+        %List{
+          elements: [
+            %Identifier{name: :import},
+            %Identifier{name: mod},
+            %Identifier{name: :as},
+            %Identifier{name: alias_name}
+          ]
+        },
+        env
+      ) do
+    {nil, Env.alias_module(env, alias_name, mod)}
   end
 
   def expand(%List{elements: [%Identifier{name: fn_name} = head | args]} = node, env) do

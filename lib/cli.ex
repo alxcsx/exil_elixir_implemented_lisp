@@ -3,11 +3,17 @@ defmodule CLI do
     {opts, files, _} =
       OptionParser.parse(
         args,
-        switches: [repl: :boolean, compile: :boolean, target: :string]
+        switches: [
+          repl: :boolean,
+          compile: :boolean,
+          target: :string,
+          root: :string,
+          std: :string
+        ]
       )
 
     mode = if opts[:compile], do: :compile, else: :interpret
-    pipeline_opts = [mode: mode]
+    pipeline_opts = [mode: mode] ++ root_opts(opts)
 
     cond do
       opts[:repl] -> REPL.start(pipeline_opts)
@@ -16,12 +22,14 @@ defmodule CLI do
     end
   end
 
+  defp root_opts(opts) do
+    [root: opts[:root], std: opts[:std]] |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+  end
+
   defp run_file(file, opts) do
-    with {:ok, source} <- File.read(file),
-         {:ok, result, _env} <- Pipeline.run(source, opts) do
-      IO.puts("=> #{inspect(result)}")
-    else
-      {:error, err} -> IO.puts("Compiler Error: #{err}")
+    case Pipeline.run_file(file, opts) do
+      {:ok, result, _env} -> IO.puts("=> #{inspect(result)}")
+      {:error, err} -> IO.puts("Compiler Error: #{inspect(err)}")
     end
   end
 end
