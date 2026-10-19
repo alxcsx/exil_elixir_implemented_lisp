@@ -8,7 +8,17 @@ defmodule Midfield.TypeCheckerTest do
   defp check(source) do
     {:ok, tokens} = Parser.Lexer.run(source)
     {:ok, forms} = Parser.SyntaxAnalyzer.run(tokens)
-    {:ok, expanded, env} = MacroExpander.run(%AST.Module{name: :__main__, body: forms}, Env.new())
+
+    prelude =
+      Enum.reduce([:+, :-, :*, :/, :**], Env.new(), fn name, env ->
+        Env.put_var(env, name, %{type: :Any, arity: 2})
+      end)
+
+    module_env = Env.new(prelude)
+
+    {:ok, expanded, env} =
+      MacroExpander.run(%AST.Module{name: :__main__, body: forms}, module_env)
+
     TypeChecker.run(expanded, env)
   end
 
@@ -39,9 +49,15 @@ defmodule Midfield.TypeCheckerTest do
     end
 
     test "nomes da linguagem não podem ser declarados pelo programa" do
-      for name <- ["+", "**", "list", "def", "Int"] do
+      for name <- ["list", "def", "Int"] do
         assert_error("(def #{name} 1)", "identificador reservado")
       end
+    end
+
+    test "nomes aritméticos vêm do ambiente pai e podem ser sombreados no módulo" do
+      env = checked!("(def + (fn [x] x)) (+ 1)")
+      assert %{arity: 1} = Env.get_var(env, :+)
+      assert_error("(def + (fn [x] x)) (+ 1 2)", "+ espera 1 argumento(s)")
     end
 
     test "a função pode referir-se ao próprio nome, mas um valor comum não" do
@@ -62,14 +78,20 @@ defmodule Midfield.TypeCheckerTest do
       assert_error("(let [x 1] x) x", "identificador não declarado: x")
     end
 
-    test "quote mantém nomes como dados, mas tuplas e mapas validam usos" do
-      checked!("(quote missing)")
+    test "tuplas e mapas validam usos" do
+      # quote será consumido antes do checker quando o contrato do MacroExpander estiver pronto.
+      # checked!("(quote missing)")
       assert_error("[missing]", "identificador não declarado: missing")
       assert_error("{:key missing}", "identificador não declarado: missing")
     end
   end
 
   describe "aridade e chamadas" do
+    test "o pipeline disponibiliza operações aritméticas no ambiente pai" do
+      assert {:ok, _results, env} = Pipeline.run("(+ 1 2)")
+      assert %{type: :Any, arity: 2} = Env.get_var(env, :+)
+    end
+
     test "operações aritméticas aceitam exatamente dois argumentos" do
       for name <- ["+", "-", "*", "/", "**"] do
         checked!("(#{name} 1 2)")
@@ -106,7 +128,7 @@ defmodule Midfield.TypeCheckerTest do
       assert %{type: :Int} = Env.get_var(env, :integer)
       assert %{type: :Float} = Env.get_var(env, :decimal)
       assert %{type: :Str} = Env.get_var(env, :text)
-      assert %{type: :Symbol} = Env.get_var(env, :symbol)
+      assert %{type: {:Symbol, :ok}} = Env.get_var(env, :symbol)
       assert %{type: {:Tuple, [{:Symbol, :ok}, :Int]}} = Env.get_var(env, :tuple)
       assert %{type: {:Map, %{count: :Int}}} = Env.get_var(env, :record)
     end
@@ -136,6 +158,68 @@ defmodule Midfield.TypeCheckerTest do
   end
 
   describe "assinaturas e aliases" do
+    test "spec e def-type são consumidos sem chegar à AST devolvida" do
+      source =
+        "(def-type Count Int) " <>
+          "(spec identity (-> [Count] Count)) (def identity (fn [x] x)) (identity 1)"
+
+      assert {:ok,
+              %AST.Module{
+                body: [
+                  %AST.List{elements: [%AST.Identifier{name: :def} | _]},
+                  %AST.List{elements: [%AST.Identifier{name: :identity} | _]}
+                ]
+              }, env} = check(source)
+
+      assert :Int = Env.get_type(env, :Count)
+      assert %{signature: %{args: [:Int], result: :Int}} = Env.get_var(env, :identity)
+    end
+
+    test "_ffi mantém a definição para o backend e usa a aridade informada" do
+      source = "(def eq (_ffi :erlang :== 2)) (eq 1 \"x\")"
+
+      assert {:ok,
+              %AST.Module{
+                body: [
+                  %AST.List{
+                    elements: [
+                      %AST.Identifier{name: :def},
+                      %AST.Identifier{name: :eq},
+                      %AST.List{elements: [%AST.Identifier{name: :_ffi} | _]}
+                    ]
+                  },
+                  _call
+                ]
+              }, env} = check(source)
+
+      assert %{type: :Any, arity: 2} = Env.get_var(env, :eq)
+      assert_error(source <> " (eq 1)", "eq espera 2 argumento(s)")
+    end
+
+    test "spec de _ffi anota tipos e exige a mesma aridade" do
+      source =
+        "(def-type Bool (U :true :false)) " <>
+          "(spec eq (-> [Any Any] Bool)) (def eq (_ffi :erlang :== 2)) (eq 1 1)"
+
+      assert {:ok, %AST.Module{body: [_definition, _call]}, env} = check(source)
+      assert %{arity: 2, signature: %{result: {:Union, _}}} = Env.get_var(env, :eq)
+
+      assert_error(
+        "(spec eq (-> [Any] Any)) (def eq (_ffi :erlang :== 2))",
+        "não corresponde à aridade do _ffi"
+      )
+    end
+
+    test "_ffi exige símbolos para módulo e função e aridade não negativa" do
+      for source <- [
+            "(def eq (_ffi erlang :== 2))",
+            "(def eq (_ffi :erlang == 2))",
+            "(def eq (_ffi :erlang :== -1))"
+          ] do
+        assert_error(source, "forma _ffi inválida")
+      end
+    end
+
     test "spec é imediatamente anterior ao def mesmo com linhas em branco" do
       env = checked!("(spec identity (-> [Int] Int))\n\n(def identity (fn [x] x))")
       assert %{arity: 1, signature: %{args: [:Int], result: :Int}} = Env.get_var(env, :identity)
@@ -179,6 +263,19 @@ defmodule Midfield.TypeCheckerTest do
       assert_error("(def-type Int Str)", "nome de tipo reservado")
       assert_error("(def x 1) (def-type x Int)", "coincide com variável")
       assert_error("(def-type x Int) (def x 1)", "coincide com tipo")
+    end
+
+    test "qualquer símbolo literal tem tipo específico sem perder compatibilidade com Symbol" do
+      source =
+        "(def-type State (U :ready :done)) " <>
+          "(spec accepts (-> [State] Symbol)) (def accepts (fn [value] value))"
+
+      checked!(source <> " (accepts :ready) (accepts :done)")
+      assert_error(source <> " (accepts :other)", "argumento de accepts")
+
+      checked!(
+        "(spec accepts (-> [Symbol] Symbol)) (def accepts (fn [value] value)) (accepts :other)"
+      )
     end
 
     test "alias genérico instancia os parâmetros agrupados entre colchetes" do

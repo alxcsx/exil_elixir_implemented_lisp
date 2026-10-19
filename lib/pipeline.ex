@@ -6,9 +6,12 @@ defmodule Pipeline do
   alias Core.AST.{Identifier, List, Module}
   alias Core.Env
 
+  @arithmetic_names [:+, :-, :*, :/, :**]
+  @arithmetic_binding %{type: :Any, arity: 2}
+
   def run(source, opts \\ []) do
     mode = Keyword.get(opts, :mode, :interpret)
-    env = Keyword.get(opts, :env, Env.new())
+    env = opts |> Keyword.get(:env, Env.new()) |> with_arithmetic()
 
     with {:ok, forms} <- parse(source),
          {:ok, modules} <- identify_modules(forms) do
@@ -49,6 +52,16 @@ defmodule Pipeline do
   end
 
   # --  Helpers
+
+  defp with_arithmetic(env) do
+    Enum.reduce(@arithmetic_names, env, fn name, current_env ->
+      if Env.has_var?(current_env, name) do
+        current_env
+      else
+        Env.put_var(current_env, name, @arithmetic_binding)
+      end
+    end)
+  end
 
   defp parse(source) do
     with {:ok, tokens} <- Parser.Lexer.run(source),
