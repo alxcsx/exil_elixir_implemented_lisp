@@ -192,7 +192,7 @@ defmodule Midfield.TypeCheckerTest do
                 ]
               }, env} = check(source)
 
-      assert %{type: :Any, arity: 2} = Env.get_var(env, :eq)
+      assert %{type: {:Fn, [:Any, :Any], :Any}, arity: 2} = Env.get_var(env, :eq)
       assert_error(source <> " (eq 1)", "eq espera 2 argumento(s)")
     end
 
@@ -331,6 +331,64 @@ defmodule Midfield.TypeCheckerTest do
 
       checked!(nested <> " (accept {:plane {:seats 4 :wings 2.0}})")
       assert_error(nested <> " (accept {:plane {:wings 2.0}})", "argumento de accept")
+    end
+  end
+
+  describe "funções como valores" do
+    test "uma assinatura de função pode ser tipo de parâmetro e de alias" do
+      source =
+        "(def-type Converter (-> [Int] Int)) " <>
+          "(spec apply (-> [Converter Int] Int)) " <>
+          "(def apply (fn [f x] (f x)))"
+
+      env = checked!(source <> " (apply (fn [x] 1) 2)")
+      assert %{type: {:Fn, [{:Fn, [:Int], :Int}, :Int], :Int}} = Env.get_var(env, :apply)
+
+      assert_error(source <> " (apply (fn [x y] 1) 2)", "argumento de apply")
+      assert_error(source <> " (apply (fn [x] 1) \"bad\")", "argumento de apply")
+    end
+
+    test "uma função retornada por outra mantém aridade e tipos dos argumentos" do
+      source =
+        "(spec make (-> [] (-> [Int] Str))) " <>
+          "(def make (fn [] (fn [x] \"ok\")))"
+
+      checked!(source <> " ((make) 1)")
+      assert_error(source <> " ((make) 1 2)", "espera 1 argumento(s)")
+      assert_error(source <> " ((make) \"bad\")", "argumento")
+    end
+
+    test "entrada mais geral e retorno mais específico permitem substituição" do
+      source =
+        "(def-type Narrow {:value Str}) (def-type Wide {:value Str :other Int}) " <>
+          "(spec candidate (-> [Narrow] Wide)) " <>
+          "(def candidate (fn [x] {:value \"ok\" :other 1})) " <>
+          "(spec use (-> [(-> [Wide] Narrow)] Narrow)) " <>
+          "(def use (fn [f] (f {:value \"ok\" :other 1})))"
+
+      checked!(source <> " (use candidate)")
+    end
+
+    test "entrada mais restrita não substitui uma função que aceita entrada geral" do
+      source =
+        "(def-type Narrow {:value Str}) (def-type Wide {:value Str :other Int}) " <>
+          "(spec candidate (-> [Wide] Narrow)) " <>
+          "(def candidate (fn [x] {:value \"ok\"})) " <>
+          "(spec use (-> [(-> [Narrow] Narrow)] Narrow)) " <>
+          "(def use (fn [f] (f {:value \"ok\"})))"
+
+      assert_error(source <> " (use candidate)", "argumento de use")
+    end
+
+    test "retorno mais geral não substitui uma função que promete retorno específico" do
+      source =
+        "(def-type Narrow {:value Str}) (def-type Wide {:value Str :other Int}) " <>
+          "(spec candidate (-> [Narrow] Narrow)) " <>
+          "(def candidate (fn [x] {:value \"ok\"})) " <>
+          "(spec use (-> [(-> [Narrow] Wide)] Wide)) " <>
+          "(def use (fn [f] (f {:value \"ok\"})))"
+
+      assert_error(source <> " (use candidate)", "argumento de use")
     end
   end
 end
