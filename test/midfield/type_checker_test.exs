@@ -10,8 +10,8 @@ defmodule Midfield.TypeCheckerTest do
     {:ok, forms} = Parser.SyntaxAnalyzer.run(tokens)
 
     prelude =
-      Enum.reduce([:+, :-, :*, :/, :**], Env.new(), fn name, env ->
-        Env.put_var(env, name, %{type: :Any, arity: 2})
+      Enum.reduce([:+, :-, :*, :/, :**], %{Env.new() | current_module: :__main__}, fn name, env ->
+        Env.put_def(env, name, %{type: :Any, arity: 2})
       end)
 
     module_env = Env.new(prelude)
