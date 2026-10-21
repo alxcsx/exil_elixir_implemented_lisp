@@ -9,6 +9,9 @@ defmodule Pipeline do
 
   alias Core.Env
 
+  @arithmetic_names [:+, :-, :*, :/, :**]
+  @arithmetic_binding %{type: :Any, arity: 2}
+
   def run(source), do: run(source, [])
 
   def run(source, opts) when is_list(opts) do
@@ -35,13 +38,17 @@ defmodule Pipeline do
 
   @doc "Compila um módulo; devolve {:ok, resultado, env} ou {:error, motivo}."
   def compile_module(module, mode, env) do
-    module_env = %{
-      Env.new(env)
-      | current_module: module.name,
-        file: module.meta[:file],
-        imports: [],
-        aliases: %{}
-    }
+    prelude_env =
+      %{
+        Env.new(env)
+        | current_module: module.name,
+          file: module.meta[:file],
+          imports: [],
+          aliases: %{}
+      }
+      |> with_arithmetic()
+
+    module_env = Env.new(prelude_env)
 
     with {:ok, expanded, module_env} <- Midfield.MacroExpander.run(module, module_env),
          {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(expanded, module_env),
@@ -51,6 +58,16 @@ defmodule Pipeline do
   end
 
   # --  Helpers
+
+  defp with_arithmetic(env) do
+    Enum.reduce(@arithmetic_names, env, fn name, current_env ->
+      if Env.get_def(current_env, name) do
+        current_env
+      else
+        Env.put_def(current_env, name, @arithmetic_binding)
+      end
+    end)
+  end
 
   defp compile_plan(plan, mode, env) do
     result =

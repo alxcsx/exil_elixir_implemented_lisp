@@ -127,9 +127,10 @@ defmodule Core.Env do
   defp split_qualified(name) when is_atom(name) do
     {prefix, [local]} = name |> Atom.to_string() |> String.split("/") |> Enum.split(-1)
 
-    case prefix do
-      [] -> :local
-      _ -> {:qualified, prefix |> Enum.join("/") |> String.to_atom(), String.to_atom(local)}
+    if prefix == [] or local == "" or Enum.any?(prefix, &(&1 == "")) do
+      :local
+    else
+      {:qualified, prefix |> Enum.join("/") |> String.to_atom(), String.to_atom(local)}
     end
   end
 
