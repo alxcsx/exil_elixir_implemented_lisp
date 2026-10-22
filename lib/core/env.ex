@@ -20,7 +20,8 @@ defmodule Core.Env do
             opts: [],
             parent: nil,
             current_module: nil,
-            file: nil
+            file: nil,
+            runtime_env: nil
 
   def new(%Core.Env{} = parent) do
     %Core.Env{
@@ -29,7 +30,8 @@ defmodule Core.Env do
       current_module: parent.current_module,
       file: parent.file,
       imports: parent.imports,
-      aliases: parent.aliases
+      aliases: parent.aliases,
+      runtime_env: parent.runtime_env
     }
   end
 
@@ -68,7 +70,13 @@ defmodule Core.Env do
 
   # -- Imports (estilo C)
 
-  def import_module(env, module), do: %{env | imports: Enum.uniq(env.imports ++ [module])}
+  def import_module(env, module) do
+    %{
+      env
+      | imports: Enum.uniq(env.imports ++ [module]),
+        aliases: Map.put_new(env.aliases, module, module)
+    }
+  end
 
   def alias_module(env, alias_name, module),
     do: %{env | aliases: Map.put(env.aliases, alias_name, module)}
@@ -119,7 +127,9 @@ defmodule Core.Env do
         end
 
       :local ->
-        lookup(env, field, {env.current_module, name}) || lookup_imports(env, field, name)
+        lookup(env, field, {env.current_module, name}) ||
+          lookup(env, field, {nil, name}) ||
+          lookup_imports(env, field, name)
     end
   end
 
