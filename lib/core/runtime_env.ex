@@ -2,15 +2,13 @@ defmodule Core.RuntimeEnv do
   @moduledoc """
   Ambiente de execução (runtime) do interpretador.
 
-  Diferente do `Core.Env` (ambiente de build/compilação que rastreia módulos,
+  Diferente do `Core.Env` (ambiente de compilação que rastreia módulos,
   macros, tipos e metadados de análise estática), o `RuntimeEnv` gerencia
-  estritamente o estado de execução:
+  estritamente o estado de execução com valores Elixir avaliados:
   - `vars`: valores de variáveis no escopo léxico
   - `defs`: definições de módulo `{módulo, nome} => valor`
   - `imports`: módulos importados
   - `aliases`: aliases de módulos
-  - `compile_env`: referência ao ambiente de compilação
-  - `macro_handlers`: funções de apoio injetadas temporariamente durante a avaliação de macros (ex: `:quote`)
   - `parent`: escopo léxico pai
   - `current_module`: módulo corrente
   """
@@ -21,8 +19,6 @@ defmodule Core.RuntimeEnv do
             defs: %{},
             imports: [],
             aliases: %{},
-            compile_env: nil,
-            macro_handlers: %{},
             parent: nil,
             current_module: nil
 
@@ -32,10 +28,8 @@ defmodule Core.RuntimeEnv do
     %Core.RuntimeEnv{
       parent: parent,
       current_module: parent.current_module,
-      compile_env: parent.compile_env,
       imports: parent.imports,
       aliases: parent.aliases,
-      macro_handlers: parent.macro_handlers,
       defs: parent.defs
     }
   end
@@ -45,12 +39,10 @@ defmodule Core.RuntimeEnv do
   end
 
   def new(opts) when is_list(opts) do
-    compile_env = Keyword.get(opts, :compile_env)
     current_module = Keyword.get(opts, :current_module, :__main__)
-    base_defs = Keyword.get(opts, :defs, Core.Prelude.runtime_defs())
+    base_defs = Keyword.get(opts, :defs, default_defs())
 
     %Core.RuntimeEnv{
-      compile_env: compile_env,
       current_module: current_module,
       defs: base_defs
     }
@@ -62,14 +54,7 @@ defmodule Core.RuntimeEnv do
       if compile_env.runtime_env do
         compile_env.runtime_env.defs
       else
-        Core.Prelude.runtime_defs()
-      end
-
-    base_macro_handlers =
-      if compile_env.runtime_env do
-        compile_env.runtime_env.macro_handlers
-      else
-        %{}
+        default_defs()
       end
 
     base_vars =
@@ -81,14 +66,16 @@ defmodule Core.RuntimeEnv do
       |> Map.merge(compile_env.vars)
 
     %Core.RuntimeEnv{
-      compile_env: compile_env,
       current_module: compile_env.current_module || :__main__,
       imports: compile_env.imports,
       aliases: compile_env.aliases,
       vars: base_vars,
-      defs: base_defs,
-      macro_handlers: base_macro_handlers
+      defs: base_defs
     }
+  end
+
+  defp default_defs do
+    Pipeline.base_env().runtime_env.defs
   end
 
   # -- Variáveis locais
@@ -96,7 +83,10 @@ defmodule Core.RuntimeEnv do
   def get_var(nil, _key), do: nil
 
   def get_var(%Core.RuntimeEnv{} = env, key) when is_atom(key) do
-    lookup(env, :vars, key) || resolve(env, :defs, key)
+    case fetch_lookup(env, :vars, key) do
+      {:ok, val} -> val
+      :error -> resolve(env, :defs, key)
+    end
   end
 
   def get_var(%Core.RuntimeEnv{} = env, key), do: lookup(env, :vars, key)
@@ -120,30 +110,6 @@ defmodule Core.RuntimeEnv do
 
   def get_def(%Core.RuntimeEnv{} = env, name), do: resolve(env, :defs, name)
 
-  # -- Handlers de macro (injetados temporariamente durante expansão de macros)
-
-  def put_macro_handler(%Core.RuntimeEnv{} = env, name, handler) do
-    %{env | macro_handlers: Map.put(env.macro_handlers, name, handler)}
-  end
-
-  def get_macro_handler(nil, _name), do: :error
-
-  def get_macro_handler(%Core.RuntimeEnv{} = env, name) do
-    case Map.fetch(env.macro_handlers, name) do
-      {:ok, handler} -> {:ok, handler}
-      :error -> get_macro_handler(env.parent, name)
-    end
-  end
-
-  # Fallback caso receba Core.Env
-  def get_macro_handler(%Env{} = env, name) do
-    if env.runtime_env do
-      get_macro_handler(env.runtime_env, name)
-    else
-      :error
-    end
-  end
-
   # -- Resolução interna
 
   defp resolve(%Core.RuntimeEnv{} = env, field, name) do
@@ -158,7 +124,7 @@ defmodule Core.RuntimeEnv do
         lookup(env, field, {env.current_module, name}) ||
           lookup(env, field, {nil, name}) ||
           lookup(env, field, {:__main__, name}) ||
-          lookup(env, field, {:prelude, name}) ||
+          lookup(env, field, {:Prelude, name}) ||
           lookup_imports(env, field, name)
     end
   end
@@ -179,12 +145,19 @@ defmodule Core.RuntimeEnv do
     Enum.find_value(env.imports, fn mod -> lookup(env, field, {mod, name}) end)
   end
 
-  defp lookup(nil, _field, _key), do: nil
-
   defp lookup(env, field, key) do
-    case Map.fetch(Map.fetch!(env, field), key) do
+    case fetch_lookup(env, field, key) do
       {:ok, val} -> val
-      :error -> lookup(env.parent, field, key)
+      :error -> nil
+    end
+  end
+
+  defp fetch_lookup(nil, _field, _key), do: :error
+
+  defp fetch_lookup(env, field, key) do
+    case Map.fetch(Map.fetch!(env, field), key) do
+      {:ok, val} -> {:ok, val}
+      :error -> fetch_lookup(env.parent, field, key)
     end
   end
 end

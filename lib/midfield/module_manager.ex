@@ -94,18 +94,25 @@ defmodule Midfield.ModuleManager do
     end
   end
 
-  @doc "Plano `[{módulo, arquivo}]` da fonte e dependências, dependências primeiro."
-  def load_plan(source, env, opts \\ []) do
+  @doc "Monta o plano de compilação `[{módulo, arquivo}]` a partir das formas já parseadas da fonte."
+  def build_plan(forms, env, opts \\ []) do
     with {:ok, env} <- ensure_discovered(opts[:std], env),
          {:ok, ctx} <- source_ctx(env, opts),
          {:ok, name} <- entry_name(ctx),
-         {:ok, plan, env} <- load_forms(name, source, ctx, env, [], false) do
+         {:ok, plan, env} <- plan_from_forms(name, forms, ctx, env, [], false) do
       plan = Enum.uniq_by(plan, fn {module, path} -> {module.name, path} end)
 
       case duplicate_plan(plan) do
         nil -> {:ok, plan, env}
         {name, paths} -> {:error, "módulo duplicado: #{name} (#{Enum.join(paths, ", ")})"}
       end
+    end
+  end
+
+  @doc "Lê a fonte, faz o parse e monta o plano de compilação."
+  def load_plan(source, env, opts \\ []) do
+    with {:ok, forms} <- Parser.parse(source) do
+      build_plan(forms, env, opts)
     end
   end
 
@@ -139,12 +146,13 @@ defmodule Midfield.ModuleManager do
   end
 
   defp load_file(name, path, ctx, env, stack, skip_loaded?) do
-    with {:ok, source} <- File.read(path) do
-      load_forms(name, source, ctx, env, stack, skip_loaded?)
+    with {:ok, source} <- File.read(path),
+         {:ok, forms} <- Parser.parse(source) do
+      plan_from_forms(name, forms, %{ctx | file: path}, env, stack, skip_loaded?)
     end
   end
 
-  defp load_forms(name, source, ctx, env, stack, skip_loaded?) do
+  defp plan_from_forms(name, forms, ctx, env, stack, skip_loaded?) do
     path = ctx.file
 
     cond do
@@ -156,7 +164,6 @@ defmodule Midfield.ModuleManager do
 
       true ->
         with {:ok, env} <- ensure_discovered(ctx.root, env),
-             {:ok, forms} <- parse(source),
              {:ok, modules} <- identify_modules(forms, name),
              modules = stamp_file(modules, path),
              {:ok, modules} <- order(modules),
@@ -333,7 +340,7 @@ defmodule Midfield.ModuleManager do
   defp register_file(path, dir, env) do
     with {:ok, file_module} <- derive_name(path, dir),
          {:ok, source} <- File.read(path),
-         {:ok, forms} <- parse(source),
+         {:ok, forms} <- Parser.parse(source),
          {:ok, modules} <- identify_modules(forms, file_module) do
       Enum.reduce_while(modules, {:ok, env}, fn module, {:ok, env} ->
         case Env.get_module(env, module.name) do
@@ -347,12 +354,6 @@ defmodule Midfield.ModuleManager do
             {:halt, {:error, "módulo #{module.name} definido em #{other} e #{path}"}}
         end
       end)
-    end
-  end
-
-  defp parse(source) do
-    with {:ok, tokens} <- Parser.Lexer.run(source) do
-      Parser.SyntaxAnalyzer.run(tokens)
     end
   end
 

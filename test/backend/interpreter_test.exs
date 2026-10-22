@@ -25,10 +25,10 @@ defmodule Backend.InterpreterTest do
 
     test "evaluates arithmetic built-ins" do
       env = Interpreter.new_context()
-      # (+ 1 2 3)
-      assert {6, _} = Interpreter.eval(lst([id(:+), int(1), int(2), int(3)]), env)
-      # (- 10 3 2)
-      assert {5, _} = Interpreter.eval(lst([id(:-), int(10), int(3), int(2)]), env)
+      # (+ 1 2)
+      assert {3, _} = Interpreter.eval(lst([id(:+), int(1), int(2)]), env)
+      # (- 10 3)
+      assert {7, _} = Interpreter.eval(lst([id(:-), int(10), int(3)]), env)
       # (* 4 5)
       assert {20, _} = Interpreter.eval(lst([id(:*), int(4), int(5)]), env)
       # (/ 10 2)
@@ -133,23 +133,26 @@ defmodule Backend.InterpreterTest do
   end
 
   describe "Quasiquote and macro evaluator integration" do
-    test "quasiquote expands unquote and unquote-splicing with injected macro context" do
-      env =
-        Env.new()
-        |> Env.put_var(:x, int(42))
-        |> Env.put_var(:items, tup([int(1), int(2)]))
-        |> MacroExpander.inject_macro_context()
+    test "quasiquote expands unquote and unquote-splicing in MacroExpander" do
+      env = Env.new()
 
-      # (quote (+ (unquote x) (unquote-splicing items)))
-      qq_form =
+      # (defmacro qq [x items] (quote (+ (unquote x) (unquote-splicing items))))
+      macro =
         lst([
-          id(:quote),
+          id(:defmacro),
+          id(:qq),
+          tup([id(:x), id(:items)]),
           lst([
-            id(:+),
-            lst([id(:unquote), id(:x)]),
-            lst([id(:"unquote-splicing"), id(:items)])
+            id(:quote),
+            lst([
+              id(:+),
+              lst([id(:unquote), id(:x)]),
+              lst([id(:"unquote-splicing"), id(:items)])
+            ])
           ])
         ])
+
+      {nil, env} = MacroExpander.expand(macro, env)
 
       assert {%AST.List{
                 elements: [
@@ -159,7 +162,7 @@ defmodule Backend.InterpreterTest do
                   %AST.Literal{value: 2}
                 ]
               }, _} =
-               Interpreter.eval(qq_form, env)
+               MacroExpander.expand(lst([id(:qq), int(42), tup([int(1), int(2)])]), env)
     end
 
     test "quote is not available in normal runtime interpreter context" do
@@ -268,18 +271,16 @@ defmodule Backend.InterpreterTest do
       assert {:ok, [true], _} = Pipeline.run("(<: (u :true :false) Bool)")
       assert {:ok, [true], _} = Pipeline.run("(<: Bool (u :true :false))")
       assert {:ok, [true], _} = Pipeline.run("(<: Bool (U :true :false))")
+      assert {:ok, [10], _} = Pipeline.run("(if (<: :true Bool) 10 20)")
     end
 
-    test "custom macro handlers can be injected into RuntimeEnv" do
-      runtime_env =
-        Core.RuntimeEnv.new()
-        |> Core.RuntimeEnv.put_macro_handler(:custom_double, fn [arg], env ->
-          {val, env1} = Backend.Interpreter.eval(arg, env)
-          {val * 2, env1}
-        end)
+    test "variadic functions pack trailing arguments into a list via desugaring" do
+      code = """
+      (def collect (fn [head | tail] [head tail]))
+      [(collect 1) (collect 1 2 3)]
+      """
 
-      form = lst([id(:custom_double), int(21)])
-      assert {42, _} = Backend.Interpreter.eval(form, runtime_env)
+      assert {:ok, [{{1, []}, {1, [2, 3]}}], _} = Pipeline.run(code)
     end
   end
 end

@@ -1,29 +1,51 @@
 defmodule Pipeline do
   @moduledoc """
-  Orquestra a compilação.
+  Orquestra o pipeline de compilação:
 
-  `run/2` recebe a fonte e as opções (`:env`, `:mode`, `:root`, `:std`).
-  O arquivo da fonte e o módulo corrente vêm do env; sem arquivo, a fonte
-  é um script com raiz no cwd.
+      Código Fonte
+          │
+          ▼  1. Parse (Parser.Lexer -> Parser.SyntaxAnalyzer)
+      AST Bruta
+          │
+          ▼  2. Module Identification (Midfield.ModuleManager)
+      Módulos & Plano de Compilação
+          │
+          ▼  3. Desugar (Parser.Desugar)
+      AST Normalizada
+          │
+          ▼  4. Macro Expansion (Midfield.MacroExpander)
+      AST Expandida
+          │
+          ▼  5. Type Check (Midfield.TypeChecker)
+      AST Tipada
+          │
+          ▼  6. Backend (Backend.Interpreter / Backend.CodeGen)
+      Resultado da Execução / Bytecode
   """
 
   alias Core.Env
-  alias Core.Prelude
 
   @default_std Path.expand("stdlib", __DIR__)
+  @prelude_file Path.join(@default_std, "prelude.exl")
+
+  def base_env do
+    {:ok, _, env} =
+      run_file(@prelude_file, env: %{Env.new() | runtime_env: %Core.RuntimeEnv{}}, std: nil)
+
+    env
+  end
 
   def run(source), do: run(source, [])
 
   def run(source, opts) when is_list(opts) do
     opts = Keyword.put_new(opts, :std, default_std())
-    env = Keyword.get(opts, :env, Prelude.init(Env.new()))
+    env = Keyword.get_lazy(opts, :env, &base_env/0)
     mode = Keyword.get(opts, :mode, :interpret)
 
-    with {:ok, plan, env} <- Midfield.ModuleManager.load_plan(source, env, opts) do
-      case compile_plan(plan, mode, env) do
-        {:ok, results, env} -> {:ok, results, %{env | file: nil}}
-        {:error, _} = error -> error
-      end
+    with {:ok, forms} <- Parser.parse(source),
+         {:ok, plan, env} <- Midfield.ModuleManager.build_plan(forms, env, opts),
+         {:ok, results, env} <- compile_plan(plan, mode, env) do
+      {:ok, results, %{env | file: nil}}
     end
   end
 
@@ -33,7 +55,7 @@ defmodule Pipeline do
     opts = Keyword.put_new(opts, :std, default_std())
 
     with {:ok, source} <- File.read(path) do
-      env = Keyword.get(opts, :env, Prelude.init(Env.new()))
+      env = Keyword.get_lazy(opts, :env, &base_env/0)
       run(source, Keyword.put(opts, :env, %{env | file: path}))
     end
   end
@@ -42,7 +64,10 @@ defmodule Pipeline do
     if File.dir?(@default_std), do: @default_std, else: nil
   end
 
-  @doc "Compila um módulo; devolve {:ok, resultado, env} ou {:error, motivo}."
+  @doc """
+  Compila um módulo através das fases:
+  3. Desugar -> 4. Macro Expansion -> 5. Type Check -> 6. Backend
+  """
   def compile_module(module, mode, env) do
     module_env =
       %{
@@ -54,7 +79,8 @@ defmodule Pipeline do
           runtime_env: env.runtime_env
       }
 
-    with {:ok, expanded, module_env} <- Midfield.MacroExpander.run(module, module_env),
+    with {:ok, desugared} <- Parser.Desugar.run(module),
+         {:ok, expanded, module_env} <- Midfield.MacroExpander.run(desugared, module_env),
          {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(expanded, module_env),
          {:ok, result, module_env} <- run_backend(mode, typed_ast, module_env) do
       {:ok, result, module_env}
@@ -64,26 +90,22 @@ defmodule Pipeline do
   # --  Helpers
 
   defp compile_plan(plan, mode, env) do
-    result =
-      Enum.reduce_while(plan, {:ok, [], env}, fn {module, path}, {:ok, results, env} ->
-        case compile_module(module, mode, env) do
-          {:ok, result, env} ->
-            env = env |> Env.mark_defined(module.name) |> mark_loaded(path)
-            {:cont, {:ok, [result | results], env}}
+    Enum.reduce_while(plan, {:ok, [], env}, fn {module, path}, {:ok, acc, env} ->
+      case compile_module(module, mode, env) do
+        {:ok, result, env} ->
+          env = Env.mark_defined(env, module.name)
+          env = if path, do: Env.mark_loaded(env, path), else: env
+          {:cont, {:ok, [result | acc], env}}
 
-          {:error, _} = error ->
-            {:halt, error}
-        end
-      end)
-
-    case result do
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
       {:ok, results, env} -> {:ok, Enum.reverse(results), env}
       {:error, _} = error -> error
     end
   end
-
-  defp mark_loaded(env, nil), do: env
-  defp mark_loaded(env, path), do: Env.mark_loaded(env, path)
 
   defp run_backend(:interpret, ast, env), do: Backend.Interpreter.run(ast, env)
   defp run_backend(:compile, ast, env), do: Backend.CodeGen.run(ast, env)

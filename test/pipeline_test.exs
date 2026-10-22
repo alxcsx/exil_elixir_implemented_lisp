@@ -145,14 +145,14 @@ defmodule PipelineTest do
   end
 
   defp build!(code) do
-    {:ok, tokens} = Parser.Lexer.run(code)
-    {:ok, forms} = Parser.SyntaxAnalyzer.run(tokens)
+    {:ok, forms} = Parser.parse(code)
     {:ok, modules} = Midfield.ModuleManager.identify_modules(forms)
     base = Core.Env.new()
 
     Enum.map(modules, fn module ->
       env = %{Core.Env.new(base) | current_module: module.name}
-      {:ok, expanded, _env} = Midfield.MacroExpander.run(module, env)
+      {:ok, desugared} = Parser.Desugar.run(module)
+      {:ok, expanded, _env} = Midfield.MacroExpander.run(desugared, env)
       expanded
     end)
   end

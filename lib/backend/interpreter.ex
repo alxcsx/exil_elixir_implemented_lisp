@@ -9,13 +9,11 @@ defmodule Backend.Interpreter do
   alias Core.AST
   alias Core.AST.{Identifier, List, Literal, Tuple}
   alias Core.Env
-  alias Core.Params
-  alias Core.Prelude
   alias Core.RuntimeEnv
 
   @doc "Cria um contexto de execução para o interpretador, referenciando o Prelude."
   def new_context(env \\ nil) do
-    base = env || Prelude.init(Env.new())
+    base = env || Pipeline.base_env()
     RuntimeEnv.from_compile_env(base)
   end
 
@@ -126,7 +124,7 @@ defmodule Backend.Interpreter do
 
   def eval(other, env), do: {other, env}
 
-  # -- Formas especiais da linguagem (funções Elixir nativas do interpretador)
+  # -- Formas especiais da linguagem
 
   defp eval_form(
          :def,
@@ -141,28 +139,6 @@ defmodule Backend.Interpreter do
   defp eval_form(:def, %List{meta: meta}, _env) do
     line = if is_map(meta), do: Map.get(meta, :line, "?"), else: "?"
     raise "def espera nome e expressão na linha #{line}"
-  end
-
-  defp eval_form(name, _node, env) when name in [:spec, :"def-type"],
-    do: {nil, env}
-
-  defp eval_form(
-         :"<:",
-         %List{elements: [%Identifier{name: :"<:"}, t1_expr, t2_expr]},
-         env
-       ) do
-    compile_env = env_compile_context(env)
-
-    case Midfield.TypeChecker.subtype?(t1_expr, t2_expr, compile_env) do
-      {:ok, true} -> {true, env}
-      {:ok, false} -> {false, env}
-      {:error, msg} -> raise msg
-    end
-  end
-
-  defp eval_form(:"<:", %List{meta: meta}, _env) do
-    line = if is_map(meta), do: Map.get(meta, :line, "?"), else: "?"
-    raise "<: espera exatamente 2 argumentos na linha #{line}"
   end
 
   defp eval_form(
@@ -205,7 +181,7 @@ defmodule Backend.Interpreter do
 
   defp eval_form(
          :if,
-         %List{elements: [%Identifier{name: :if}, cond_expr, then_expr | else_exprs]},
+         %List{elements: [%Identifier{name: :if}, cond_expr, then_expr, else_expr]},
          env
        ) do
     {cond_val, env1} = eval(cond_expr, env)
@@ -213,15 +189,16 @@ defmodule Backend.Interpreter do
     if truthy?(cond_val) do
       eval(then_expr, env1)
     else
-      case else_exprs do
-        [else_expr | _] -> eval(else_expr, env1)
-        [] -> {nil, env1}
-      end
+      eval(else_expr, env1)
     end
   end
 
   defp eval_form(:if, _node, _env) do
-    raise "if espera pelo menos condição e expressão then"
+    raise "if espera condição, expressão then e expressão else"
+  end
+
+  defp eval_form(:list, %List{elements: [%Identifier{name: :list} | args]}, env) do
+    Enum.map_reduce(args, env, &eval/2)
   end
 
   defp eval_form(
@@ -241,6 +218,10 @@ defmodule Backend.Interpreter do
         raise "aridade incorreta para _ffi #{mod}:#{fun}: esperado #{arity}, recebido #{length(args)}"
       end
 
+      args =
+        if mod in [Core.AST, Midfield.MacroExpander],
+          do: args,
+          else: Enum.map(args, &unwrap_literal/1)
       apply(mod, fun, args)
     end
 
@@ -251,15 +232,8 @@ defmodule Backend.Interpreter do
     raise "_ffi espera módulo, função e aridade"
   end
 
-  # Handlers de apoio a macros injetados dinamicamente (ex: :quote) ou chamadas de função padrão
   defp eval_form(name, %List{elements: [%Identifier{name: name} | args], meta: meta}, env) do
-    case RuntimeEnv.get_macro_handler(env, name) do
-      {:ok, handler} ->
-        handler.(args, env)
-
-      :error ->
-        eval_call(%Identifier{name: name, meta: meta}, args, env, meta)
-    end
+    eval_call(%Identifier{name: name, meta: meta}, args, env, meta)
   end
 
   # -- Chamadas de função
@@ -288,50 +262,33 @@ defmodule Backend.Interpreter do
   defp eval_def_value(_name, expr, env), do: eval(expr, env)
 
   defp make_closure(params, body, env, fn_name \\ nil) do
-    case Params.parse(params) do
-      {:ok, %{fixed: fixed_params, rest: rest_param}} ->
-        fixed_names = Enum.map(fixed_params, & &1.name)
-        fixed_count = length(fixed_names)
+    param_names = Enum.map(params, & &1.name)
+    arity = length(param_names)
 
-        fn call_args ->
-          actual_count = length(call_args)
+    fn call_args ->
+      if length(call_args) != arity do
+        raise "aridade incorreta: esperado #{arity}, recebido #{length(call_args)}"
+      end
 
-          if (is_nil(rest_param) and actual_count != fixed_count) or
-               (not is_nil(rest_param) and actual_count < fixed_count) do
-            raise "aridade incorreta: esperado #{fixed_count}, recebido #{actual_count}"
+      bindings =
+        param_names
+        |> Enum.zip(call_args)
+        |> Map.new()
+
+      fn_env =
+        RuntimeEnv.new(env)
+        |> RuntimeEnv.put_vars(bindings)
+        |> then(fn current_env ->
+          if fn_name do
+            self_fn = make_closure(params, body, env, fn_name)
+            RuntimeEnv.put_def(current_env, fn_name, self_fn)
+          else
+            current_env
           end
+        end)
 
-          bindings =
-            fixed_names
-            |> Enum.zip(Enum.take(call_args, fixed_count))
-            |> Map.new()
-
-          bindings =
-            if rest_param do
-              rest_args = Enum.drop(call_args, fixed_count)
-              Map.put(bindings, rest_param.name, rest_args)
-            else
-              bindings
-            end
-
-          fn_env =
-            RuntimeEnv.new(env)
-            |> RuntimeEnv.put_vars(bindings)
-            |> then(fn current_env ->
-              if fn_name do
-                self_fn = make_closure(params, body, env, fn_name)
-                RuntimeEnv.put_def(current_env, fn_name, self_fn)
-              else
-                current_env
-              end
-            end)
-
-          {res, _} = eval_sequence(body, fn_env)
-          res
-        end
-
-      {:error, msg} ->
-        raise msg
+      {res, _} = eval_sequence(body, fn_env)
+      res
     end
   end
 
@@ -345,9 +302,7 @@ defmodule Backend.Interpreter do
 
       true ->
         {:arity, actual_arity} = :erlang.fun_info(callee, :arity)
-
         line = if is_map(meta), do: Map.get(meta, :line, "?"), else: "?"
-
         raise "aridade incorreta na linha #{line}: esperado #{actual_arity}, recebido #{length(evaluated_args)}"
     end
   end
@@ -358,21 +313,16 @@ defmodule Backend.Interpreter do
   end
 
   defp get_var_value(env, name) do
-    case RuntimeEnv.get_var(env, name) do
-      nil -> :error
-      val -> {:ok, val}
+    if RuntimeEnv.has_var?(env, name) do
+      {:ok, RuntimeEnv.get_var(env, name)}
+    else
+      :error
     end
   end
 
-  defp env_compile_context(%RuntimeEnv{compile_env: %Env{} = c_env}), do: c_env
+  defp unwrap_literal(%Literal{value: val}), do: val
+  defp unwrap_literal(val), do: val
 
-  defp env_compile_context(%RuntimeEnv{parent: parent}) when not is_nil(parent),
-    do: env_compile_context(parent)
-
-  defp env_compile_context(%Env{} = env), do: env
-  defp env_compile_context(_), do: Prelude.init(Env.new())
-
-  def truthy?(val) do
-    Prelude.truthy?(val)
-  end
+  def truthy?(%Literal{type: :Key, value: val}), do: truthy?(val)
+  def truthy?(val), do: val not in [false, nil]
 end

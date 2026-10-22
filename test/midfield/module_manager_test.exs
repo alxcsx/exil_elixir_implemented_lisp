@@ -18,10 +18,7 @@ defmodule Midfield.ModuleManagerTest do
     dir
   end
 
-  defp parse(source) do
-    {:ok, tokens} = Parser.Lexer.run(source)
-    Parser.SyntaxAnalyzer.run(tokens)
-  end
+  defp parse(source), do: Parser.parse(source)
 
   defp plan(dir, rel, opts \\ []) do
     path = Path.join(dir, rel)

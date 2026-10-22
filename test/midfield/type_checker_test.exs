@@ -6,18 +6,15 @@ defmodule Midfield.TypeCheckerTest do
   alias Midfield.{MacroExpander, TypeChecker}
 
   defp check(source) do
-    {:ok, tokens} = Parser.Lexer.run(source)
-    {:ok, forms} = Parser.SyntaxAnalyzer.run(tokens)
+    {:ok, forms} = Parser.parse(source)
 
-    prelude =
-      Core.Prelude.init(%{Env.new() | current_module: :__main__})
-
+    prelude = %{Pipeline.base_env() | current_module: :__main__}
     module_env = Env.new(prelude)
 
-    {:ok, expanded, env} =
-      MacroExpander.run(%AST.Module{name: :__main__, body: forms}, module_env)
-
-    TypeChecker.run(expanded, env)
+    with {:ok, desugared} <- Parser.Desugar.run(%AST.Module{name: :__main__, body: forms}),
+         {:ok, expanded, env} <- MacroExpander.run(desugared, module_env) do
+      TypeChecker.run(expanded, env)
+    end
   end
 
   defp checked!(source) do
@@ -87,7 +84,7 @@ defmodule Midfield.TypeCheckerTest do
   describe "aridade e chamadas" do
     test "o pipeline disponibiliza operações aritméticas no ambiente pai" do
       assert {:ok, _results, env} = Pipeline.run("(+ 1 2)")
-      assert %{type: :Any, arity: 2} = Env.get_var(env, :+)
+      assert %{type: {:Fn, [:Any, :Any], :Any}, arity: 2} = Env.get_var(env, :+)
     end
 
     test "operações aritméticas aceitam exatamente dois argumentos" do
@@ -141,6 +138,7 @@ defmodule Midfield.TypeCheckerTest do
       env = checked!("(def a (let [x 1] x)) (def b (if :true \"yes\" \"no\"))")
       assert %{type: :Int} = Env.get_var(env, :a)
       assert %{type: :Str} = Env.get_var(env, :b)
+      assert_error("(if :true 1)", "if espera exatamente 3 argumentos")
     end
 
     test "list aceita zero ou mais elementos e infere união para tipos diferentes" do

@@ -4,7 +4,7 @@ defmodule Midfield.TypeChecker do
   alias Core.AST
   alias Core.AST.{Identifier, List, Tuple}
   alias Core.Env
-  alias Core.Params
+  alias Parser.Desugar
 
   @collection_names [:list]
   @special_forms [
@@ -27,23 +27,24 @@ defmodule Midfield.TypeChecker do
   @unknown_binding %{type: :Any, arity: :unknown}
   @list_binding %{type: :Any, arity: :variadic}
 
-  def run(%AST.Module{body: forms} = module, env) do
+  def run(%AST.Module{} = module, env) do
     env = add_list_name(env)
 
-    case check_module_forms(forms, env) do
-      {:ok, checked_forms, checked_env} ->
-        {:ok, %AST.Module{module | body: checked_forms}, checked_env}
-
-      {:error, message} ->
-        {:error, with_file(message, env)}
+    with {:ok, %AST.Module{body: forms} = mod} <- Desugar.run(module),
+         {:ok, checked_forms, checked_env} <- check_module_forms(forms, env) do
+      {:ok, %AST.Module{mod | body: checked_forms}, checked_env}
+    else
+      {:error, message} -> {:error, with_file(message, env)}
     end
   end
 
   def run(ast, env) do
     env = add_list_name(env)
 
-    case check(ast, env, :module) do
-      {:ok, checked_env} -> {:ok, ast, checked_env}
+    with {:ok, desugared} <- Desugar.run(ast),
+         {:ok, rewritten, checked_env} <- check(desugared, env, :module) do
+      {:ok, rewritten, checked_env}
+    else
       {:error, message} -> {:error, with_file(message, env)}
     end
   end
@@ -64,10 +65,10 @@ defmodule Midfield.TypeChecker do
           %List{elements: [%Identifier{name: :def}, %Identifier{name: ^name}, _]} = definition
           | remaining
         ] ->
-          with {:ok, next_env} <-
+          with {:ok, rewritten_def, next_env} <-
                  check(definition, Env.put_type(env, {:spec, name}, signature), :module),
                {:ok, checked_rest, final_env} <- check_module_forms(remaining, next_env) do
-            {:ok, [definition | checked_rest], final_env}
+            {:ok, [rewritten_def | checked_rest], final_env}
           end
 
         _ ->
@@ -76,41 +77,11 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp check_module_forms(
-         [%List{elements: [%Identifier{name: :"def-type"} | _]} = type_form | rest],
-         env
-       ) do
-    with {:ok, next_env} <- check(type_form, env, :module) do
-      check_module_forms(rest, next_env)
-    end
-  end
-
-  defp check_module_forms(
-         [%List{elements: [%Identifier{name: :"<:"}, t1, t2], meta: meta} | rest],
-         env
-       ) do
-    with {:ok, parsed_t1} <- parse_type(t1, env),
-         {:ok, parsed_t2} <- parse_type(t2, env) do
-      result = if compatible_types?(parsed_t1, parsed_t2), do: true, else: false
-      rewritten = %AST.Literal{type: :Key, value: result, meta: meta}
-
-      with {:ok, checked_rest, final_env} <- check_module_forms(rest, env) do
-        {:ok, [rewritten | checked_rest], final_env}
-      end
-    end
-  end
-
-  defp check_module_forms(
-         [%List{elements: [%Identifier{name: :"<:"} | _], meta: meta} | _rest],
-         _env
-       ) do
-    error("<: espera exatamente 2 argumentos", meta)
-  end
-
   defp check_module_forms([form | rest], env) do
-    with {:ok, next_env} <- check(form, env, :module),
+    with {:ok, rewritten, next_env} <- check(form, env, :module),
          {:ok, checked_rest, final_env} <- check_module_forms(rest, next_env) do
-      {:ok, [form | checked_rest], final_env}
+      items = if is_nil(rewritten), do: checked_rest, else: [rewritten | checked_rest]
+      {:ok, items, final_env}
     end
   end
 
@@ -128,7 +99,7 @@ defmodule Midfield.TypeChecker do
     with :ok <- check_type_name(name, env),
          {:ok, type_env, names} <- bind_type_parameters(parameters, Env.new(env)),
          {:ok, parsed_type} <- parse_type(type, type_env) do
-      {:ok, Env.put_type(env, name.name, %{params: names, body: parsed_type})}
+      {:ok, nil, Env.put_type(env, name.name, %{params: names, body: parsed_type})}
     end
   end
 
@@ -139,12 +110,12 @@ defmodule Midfield.TypeChecker do
        ) do
     with :ok <- check_type_name(name, env),
          {:ok, parsed_type} <- parse_type(type, env) do
-      {:ok, Env.put_type(env, name.name, parsed_type)}
+      {:ok, nil, Env.put_type(env, name.name, parsed_type)}
     end
   end
 
   defp check(
-         %List{elements: [%Identifier{name: :def}, %Identifier{} = name, value]},
+         %List{elements: [%Identifier{name: :def} = head, %Identifier{} = name, value]} = node,
          env,
          :module
        ) do
@@ -162,8 +133,6 @@ defmodule Midfield.TypeChecker do
         signature = Env.get_type(env, {:spec, name.name})
         binding = binding_with_signature(binding_for(value, env), signature)
 
-        # A função pode referir-se ao próprio nome no corpo, mas o vínculo
-        # ainda não está disponível para calcular um valor comum.
         value_env =
           case value do
             %List{elements: [%Identifier{name: :fn}, %Tuple{} | _]} ->
@@ -173,8 +142,10 @@ defmodule Midfield.TypeChecker do
               env
           end
 
-        with {:ok, _} <- check_declared_value(value, value_env, signature, name.meta) do
-          {:ok, Env.put_def(env, name.name, binding)}
+        with {:ok, rewritten_value, _} <-
+               check_declared_value(value, value_env, signature, name.meta) do
+          {:ok, %List{node | elements: [head, name, rewritten_value]},
+           Env.put_def(env, name.name, binding)}
         end
     end
   end
@@ -183,33 +154,59 @@ defmodule Midfield.TypeChecker do
     do: error("declaração def fora do módulo ou inválida", node.meta)
 
   defp check(
-         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params} | body], meta: meta},
+         %List{elements: [%Identifier{name: :fn} = head, %Tuple{} = params_tuple | body]} = node,
          env,
          _scope
        ) do
-    with {:ok, parameter_shape} <- parse_parameters(params, meta),
-         {:ok, fn_env} <- bind_parameters(parameter_shape, Env.new(env)),
-         {:ok, _} <- check_sequence(body, fn_env, :local) do
-      {:ok, env}
+    with {:ok, fn_env} <- bind_fn_params(params_tuple, Env.new(env)),
+         {:ok, rewritten_body, _} <- check_sequence(body, fn_env, :local) do
+      {:ok, %List{node | elements: [head, params_tuple | rewritten_body]}, env}
     end
   end
 
   defp check(
-         %List{elements: [%Identifier{name: :let}, %Tuple{elements: bindings} | body]},
+         %List{elements: [%Identifier{name: :let} = head, %Tuple{elements: []} = tup | body]} =
+           node,
          env,
          _scope
        ) do
-    with {:ok, let_env} <- bind_locals(bindings, Env.new(env)),
-         {:ok, _} <- check_sequence(body, let_env, :local) do
-      {:ok, env}
+    with {:ok, rewritten_body, _} <- check_sequence(body, Env.new(env), :local) do
+      {:ok, %List{node | elements: [head, tup | rewritten_body]}, env}
     end
   end
 
-  defp check(%List{elements: [%Identifier{name: :if} | expressions]}, env, _scope) do
-    with {:ok, _} <- check_sequence(expressions, env, :expression) do
-      {:ok, env}
+  defp check(
+         %List{
+           elements: [
+             %Identifier{name: :let} = head,
+             %Tuple{elements: [%Identifier{} = name, value]} = tup | body
+           ]
+         } = node,
+         env,
+         _scope
+       ) do
+    with {:ok, rewritten_val, _} <- check(value, env, :expression),
+         {:ok, let_env} <- bind_name(name, Env.new(env), binding_for(rewritten_val, env)),
+         {:ok, rewritten_body, _} <- check_sequence(body, let_env, :local) do
+      {:ok,
+       %List{node | elements: [head, %Tuple{tup | elements: [name, rewritten_val]} | rewritten_body]},
+       env}
     end
   end
+
+  defp check(
+         %List{elements: [%Identifier{name: :if} = head, cond_expr, then_expr, else_expr]} = node,
+         env,
+         _scope
+       ) do
+    with {:ok, [c, t, e], _} <-
+           check_sequence([cond_expr, then_expr, else_expr], env, :expression) do
+      {:ok, %List{node | elements: [head, c, t, e]}, env}
+    end
+  end
+
+  defp check(%List{elements: [%Identifier{name: :if} | _], meta: meta}, _env, _scope),
+    do: error("if espera exatamente 3 argumentos", meta)
 
   defp check(
          %List{
@@ -219,27 +216,29 @@ defmodule Midfield.TypeChecker do
              %AST.Literal{type: :Key},
              %AST.Literal{type: :Int, value: arity}
            ]
-         },
+         } = node,
          env,
          _scope
        )
        when arity >= 0,
-       do: {:ok, env}
+       do: {:ok, node, env}
 
   defp check(%List{elements: [%Identifier{name: :_ffi} | _]} = node, _env, _scope),
     do: error("forma _ffi inválida: esperado módulo, função e aridade não negativa", node.meta)
 
   # O conteúdo de quote é dado, não uma expressão a resolver neste ponto.
-  defp check(%List{elements: [%Identifier{name: :quote}, _body]}, env, _scope), do: {:ok, env}
+  defp check(%List{elements: [%Identifier{name: :quote}, _body]} = node, env, _scope),
+    do: {:ok, node, env}
 
   defp check(
-         %List{elements: [%Identifier{name: :"<:"}, type1, type2]},
+         %List{elements: [%Identifier{name: :"<:"}, type1, type2], meta: meta},
          env,
          _scope
        ) do
-    with {:ok, _parsed1} <- parse_type(type1, env),
-         {:ok, _parsed2} <- parse_type(type2, env) do
-      {:ok, env}
+    with {:ok, parsed1} <- parse_type(type1, env),
+         {:ok, parsed2} <- parse_type(type2, env) do
+      result = compatible_types?(parsed1, parsed2)
+      {:ok, %AST.Literal{type: :Key, value: result, meta: meta}, env}
     end
   end
 
@@ -251,35 +250,63 @@ defmodule Midfield.TypeChecker do
        when name in @special_forms,
        do: error("forma especial inválida: #{name}", node.meta)
 
-  defp check(%List{elements: [head | args], meta: meta}, env, _scope) do
-    with {:ok, _} <- check_expressions([head | args], env),
+  defp check(%List{elements: [head | args], meta: meta} = node, env, _scope) do
+    with {:ok, [rewritten_head | rewritten_args], _} <-
+           check_sequence([head | args], env, :expression),
          :ok <- check_callability(head, env, meta),
          :ok <- check_arity(head, length(args), env, meta),
          :ok <- check_argument_types(head, args, env, meta) do
-      {:ok, env}
+      packed_args = pack_variadic_args(head, rewritten_args, env, meta)
+      {:ok, %List{node | elements: [rewritten_head | packed_args]}, env}
     end
   end
 
-  defp check(%List{elements: []}, env, _scope), do: {:ok, env}
+  defp check(%List{elements: []} = node, env, _scope), do: {:ok, node, env}
 
-  defp check(%Tuple{elements: elements}, env, _scope),
-    do: check_expressions(elements, env)
-
-  defp check(%AST.Map{pairs: pairs}, env, _scope) do
-    pairs
-    |> Enum.flat_map(fn {key, value} -> [key, value] end)
-    |> check_expressions(env)
+  defp check(%Tuple{elements: elements} = node, env, _scope) do
+    with {:ok, rewritten, _} <- check_sequence(elements, env, :expression) do
+      {:ok, %Tuple{node | elements: rewritten}, env}
+    end
   end
 
-  defp check(%Identifier{name: name, meta: meta}, env, _scope) do
+  defp check(%AST.Map{pairs: pairs} = node, env, _scope) do
+    Enum.reduce_while(pairs, {:ok, []}, fn {key, value}, {:ok, acc} ->
+      with {:ok, rk, _} <- check(key, env, :expression),
+           {:ok, rv, _} <- check(value, env, :expression) do
+        {:cont, {:ok, [{rk, rv} | acc]}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, %AST.Map{node | pairs: Enum.reverse(reversed)}, env}
+      error -> error
+    end
+  end
+
+  defp check(%Identifier{name: name, meta: meta} = node, env, _scope) do
     if name in @special_forms or not Env.has_var?(env, name) do
       error("identificador não declarado: #{name}", meta)
     else
-      {:ok, env}
+      {:ok, node, env}
     end
   end
 
-  defp check(%AST.Literal{}, env, _scope), do: {:ok, env}
+  defp check(%AST.Literal{} = node, env, _scope), do: {:ok, node, env}
+
+  defp pack_variadic_args(head, args, env, meta) do
+    case call_binding(head, env) do
+      %{arity: {:at_least, fixed_count}} ->
+        {fixed, rest} = Enum.split(args, fixed_count)
+        fixed ++ [%List{elements: [%Identifier{name: :list} | rest], meta: meta}]
+
+      _ ->
+        args
+    end
+  end
+
+  defp call_binding(%Identifier{name: name}, env), do: Env.get_var(env, name)
+  defp call_binding(expr, env), do: binding_for(expr, env)
 
   defp check_type_name(%Identifier{name: name, meta: meta}, env) do
     cond do
@@ -331,81 +358,51 @@ defmodule Midfield.TypeChecker do
   end
 
   defp check_sequence(forms, env, scope) do
-    Enum.reduce_while(forms, {:ok, env}, fn form, {:ok, current_env} ->
+    Enum.reduce_while(forms, {:ok, [], env}, fn form, {:ok, acc, current_env} ->
       case check(form, current_env, scope) do
+        {:ok, rewritten, next_env} -> {:cont, {:ok, [rewritten | acc], next_env}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, reversed, final_env} -> {:ok, Enum.reverse(reversed), final_env}
+      error -> error
+    end
+  end
+
+  defp bind_fn_params(%Tuple{elements: params, meta: tuple_meta}, env) do
+    case tuple_meta[:variadic] do
+      nil ->
+        bind_param_types(params, Elixir.List.duplicate(@unknown_binding, length(params)), env)
+
+      fixed_count ->
+        bindings =
+          Elixir.List.duplicate(@unknown_binding, fixed_count) ++
+            [%{type: {:List, :Any}, arity: :unknown}]
+
+        bind_param_types(params, bindings, env)
+    end
+  end
+
+  defp bind_fn_params(%Tuple{elements: params, meta: tuple_meta}, env, types) do
+    if tuple_meta[:variadic] do
+      {:error, "spec de função variádica ainda não é suportada"}
+    else
+      bindings = Enum.map(types, &%{type: &1, arity: arity_for_type(&1)})
+      bind_param_types(params, bindings, env)
+    end
+  end
+
+  defp bind_param_types(params, bindings, env) do
+    params
+    |> Enum.zip(bindings)
+    |> Enum.reduce_while({:ok, env}, fn {%Identifier{} = name, binding}, {:ok, current_env} ->
+      case bind_name(name, current_env, binding) do
         {:ok, next_env} -> {:cont, {:ok, next_env}}
         {:error, _} = error -> {:halt, error}
       end
     end)
   end
-
-  defp check_expressions(expressions, env) do
-    with {:ok, _} <- check_sequence(expressions, env, :expression) do
-      {:ok, env}
-    end
-  end
-
-  defp bind_parameters(params, env) do
-    bind_parameter_shape(params.fixed, params.rest, env)
-  end
-
-  defp bind_parameters(params, env, types) do
-    bind_parameters(params.fixed, params.rest, env, types)
-  end
-
-  defp bind_parameter_shape(params, rest, env) do
-    Enum.reduce_while(params, {:ok, env}, fn
-      %Identifier{} = name, {:ok, current_env} ->
-        case bind_name(name, current_env) do
-          {:ok, next_env} -> {:cont, {:ok, next_env}}
-          {:error, _} = error -> {:halt, error}
-        end
-
-      _, {:ok, _} ->
-        {:halt, {:error, "parâmetro de fn deve ser um identificador"}}
-    end)
-    |> bind_rest_parameter(rest)
-  end
-
-  defp bind_parameters(params, nil, env, types) do
-    params
-    |> Enum.zip(types)
-    |> Enum.reduce_while({:ok, env}, fn
-      {%Identifier{} = name, type}, {:ok, current_env} ->
-        case bind_name(name, current_env, %{type: type, arity: arity_for_type(type)}) do
-          {:ok, next_env} -> {:cont, {:ok, next_env}}
-          {:error, _} = error -> {:halt, error}
-        end
-
-      _, {:ok, _} ->
-        {:halt, {:error, "parâmetro de fn deve ser um identificador"}}
-    end)
-  end
-
-  defp bind_parameters(_params, _rest, _env, _types),
-    do: {:error, "spec de função variádica ainda não é suportada"}
-
-  defp bind_rest_parameter({:ok, env}, nil), do: {:ok, env}
-
-  defp bind_rest_parameter({:ok, env}, rest) do
-    bind_name(rest, env, %{type: {:List, :Any}, arity: :unknown})
-  end
-
-  defp bind_rest_parameter(error, _rest), do: error
-
-  defp bind_locals([], env), do: {:ok, env}
-
-  defp bind_locals([%Identifier{} = name, value | rest], env) do
-    with {:ok, _} <- check(value, env, :expression),
-         {:ok, next_env} <- bind_name(name, env, binding_for(value, env)) do
-      bind_locals(rest, next_env)
-    end
-  end
-
-  defp bind_locals(_bindings, _env),
-    do: {:error, "let deve conter pares de identificador e valor"}
-
-  defp bind_name(identifier, env, binding \\ @unknown_binding)
 
   defp bind_name(%Identifier{name: name, meta: meta}, env, binding) do
     cond do
@@ -417,35 +414,50 @@ defmodule Midfield.TypeChecker do
   end
 
   defp binding_for(
-         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params} | body]},
+         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params, meta: tmeta} = tup | body]},
          env
        ) do
-    case Params.parse(params) do
-      {:ok, parameter_shape} ->
-        result =
-          case bind_parameters(parameter_shape, Env.new(env)) do
-            {:ok, fn_env} ->
-              body |> Elixir.List.last() |> binding_for(fn_env) |> Map.fetch!(:type)
+    result =
+      case bind_fn_params(tup, Env.new(env)) do
+        {:ok, fn_env} ->
+          body |> Elixir.List.last() |> binding_for(fn_env) |> Map.fetch!(:type)
 
-            {:error, _} ->
-              :Any
-          end
+        {:error, _} ->
+          :Any
+      end
 
+    case tmeta[:variadic] do
+      nil ->
         %{
-          type: {:Fn, Elixir.List.duplicate(:Any, length(parameter_shape.fixed)), result},
-          arity: function_arity(parameter_shape)
+          type: {:Fn, Elixir.List.duplicate(:Any, length(params)), result},
+          arity: length(params)
         }
 
-      {:error, _} ->
-        @unknown_binding
+      fixed_count ->
+        %{
+          type: {:Fn, Elixir.List.duplicate(:Any, fixed_count), result},
+          arity: {:at_least, fixed_count}
+        }
     end
   end
 
   defp binding_for(
-         %List{elements: [%Identifier{name: :let}, %Tuple{elements: bindings} | body]},
+         %List{elements: [%Identifier{name: :let}, %Tuple{elements: []} | body]},
          env
        ) do
-    case bind_locals(bindings, Env.new(env)) do
+    binding_for(Elixir.List.last(body), Env.new(env))
+  end
+
+  defp binding_for(
+         %List{
+           elements: [
+             %Identifier{name: :let},
+             %Tuple{elements: [%Identifier{} = name, value]} | body
+           ]
+         },
+         env
+       ) do
+    case bind_name(name, Env.new(env), binding_for(value, env)) do
       {:ok, let_env} -> binding_for(Elixir.List.last(body), let_env)
       {:error, _} -> @unknown_binding
     end
@@ -517,7 +529,7 @@ defmodule Midfield.TypeChecker do
        ) do
     case {parse_type(type1, env), parse_type(type2, env)} do
       {{:ok, t1}, {:ok, t2}} ->
-        val = if compatible_types?(t1, t2), do: true, else: false
+        val = compatible_types?(t1, t2)
         %{type: {:Symbol, val}, arity: :unknown}
 
       _ ->
@@ -782,30 +794,28 @@ defmodule Midfield.TypeChecker do
          %{args: argument_types},
          meta
        ) do
-    with {:ok, _} <- check(value, env, :expression) do
+    with {:ok, rewritten, _} <- check(value, env, :expression) do
       %{arity: arity} = binding_for(value, env)
 
       if arity == length(argument_types),
-        do: {:ok, env},
+        do: {:ok, rewritten, env},
         else: error("quantidade de parâmetros não corresponde à aridade do _ffi", meta)
     end
   end
 
   defp check_declared_value(
-         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params} | body]},
+         %List{elements: [%Identifier{name: :fn} = head, %Tuple{elements: params, meta: tmeta} = tup | body]} = node,
          env,
          %{args: argument_types, result: result_type},
          meta
        ) do
-    with {:ok, parameter_shape} <- parse_parameters(params, meta) do
-      if parameter_shape.rest || length(parameter_shape.fixed) != length(argument_types) do
-        error("quantidade de parâmetros não corresponde à spec", meta)
-      else
-        with {:ok, fn_env} <- bind_parameters(parameter_shape, Env.new(env), argument_types),
-             {:ok, checked_env} <- check_sequence(body, fn_env, :local),
-             :ok <- check_result_type(body, checked_env, result_type, meta) do
-          {:ok, env}
-        end
+    if tmeta[:variadic] || length(params) != length(argument_types) do
+      error("quantidade de parâmetros não corresponde à spec", meta)
+    else
+      with {:ok, fn_env} <- bind_fn_params(tup, Env.new(env), argument_types),
+           {:ok, rewritten_body, checked_env} <- check_sequence(body, fn_env, :local),
+           :ok <- check_result_type(rewritten_body, checked_env, result_type, meta) do
+        {:ok, %List{node | elements: [head, tup | rewritten_body]}, env}
       end
     end
   end
@@ -826,11 +836,7 @@ defmodule Midfield.TypeChecker do
   end
 
   defp check_argument_types(head, args, env, meta) do
-    binding =
-      case head do
-        %Identifier{name: name} -> Env.get_var(env, name)
-        expression -> binding_for(expression, env)
-      end
+    binding = call_binding(head, env)
 
     case function_signature(binding) do
       %{args: expected_types} ->
@@ -1032,14 +1038,4 @@ defmodule Midfield.TypeChecker do
     do: {:error, "#{message} na linha #{Map.get(meta, :line, "?")}"}
 
   defp error(message, _meta), do: {:error, message}
-
-  defp parse_parameters(parameters, meta) do
-    case Params.parse(parameters) do
-      {:ok, shape} -> {:ok, shape}
-      {:error, message} -> error(message, meta)
-    end
-  end
-
-  defp function_arity(%{fixed: fixed, rest: nil}), do: length(fixed)
-  defp function_arity(%{fixed: fixed}), do: {:at_least, length(fixed)}
 end

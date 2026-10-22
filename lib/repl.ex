@@ -1,7 +1,10 @@
 defmodule REPL do
   def start(opts \\ []) do
     IO.puts("Starting REPL! (Type :q to exit)")
-    loop(Core.Env.new(), opts)
+    cwd = File.cwd!()
+    opts = Keyword.put_new(opts, :root, cwd)
+    initial_env = Keyword.get_lazy(opts, :env, &Pipeline.base_env/0)
+    loop(initial_env, opts)
   end
 
   defp loop(env, opts) do

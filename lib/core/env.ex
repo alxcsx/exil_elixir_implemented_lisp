@@ -129,6 +129,7 @@ defmodule Core.Env do
       :local ->
         lookup(env, field, {env.current_module, name}) ||
           lookup(env, field, {nil, name}) ||
+          lookup(env, field, {:Prelude, name}) ||
           lookup_imports(env, field, name)
     end
   end

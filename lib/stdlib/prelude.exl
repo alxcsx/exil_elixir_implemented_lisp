@@ -1,6 +1,29 @@
-(def-module prelude
+(def-module Prelude
   (def-type Bool (U :true :false))
-  (def-type bool (U :true :false))
+
+  (def + (_ffi :erlang :+ 2))
+  (def - (_ffi :erlang :- 2))
+  (def * (_ffi :erlang :* 2))
+  (def / (_ffi :erlang :div 2))
+  (def ** (_ffi :Elixir.Integer :pow 2))
+
+  (spec == (-> [Any Any] Bool))
+  (def == (_ffi :erlang :== 2))
+
+  (spec != (-> [Any Any] Bool))
+  (def != (_ffi :erlang :/= 2))
+
+  (spec < (-> [Any Any] Bool))
+  (def < (_ffi :erlang :< 2))
+
+  (spec > (-> [Any Any] Bool))
+  (def > (_ffi :erlang :> 2))
+
+  (spec <= (-> [Any Any] Bool))
+  (def <= (_ffi :erlang :=< 2))
+
+  (spec >= (-> [Any Any] Bool))
+  (def >= (_ffi :erlang :>= 2))
 
   (spec not (-> [Any] Bool))
   (def not (fn [x] (if x :false :true)))
