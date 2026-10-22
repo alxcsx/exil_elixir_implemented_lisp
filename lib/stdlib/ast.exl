@@ -1,0 +1,86 @@
+(def-module Ast
+  ;; Definições de tipos do AST
+  (def-type LiteralType (U :Int :Float :Str :Key))
+  (def-type Node Any)
+
+  ;; Construtores de nós da AST
+  (spec id (-> [(U Symbol Str)] Node))
+  (def id (_ffi :Elixir.Core.AST :identifier 1))
+
+  (spec identifier (-> [(U Symbol Str)] Node))
+  (def identifier (_ffi :Elixir.Core.AST :identifier 1))
+
+  (spec literal (-> [Any LiteralType] Node))
+  (def literal (_ffi :Elixir.Core.AST :literal 2))
+
+  (spec int (-> [Int] Node))
+  (def int (_ffi :Elixir.Core.AST :int 1))
+
+  (spec float (-> [Float] Node))
+  (def float (_ffi :Elixir.Core.AST :float 1))
+
+  (spec str (-> [Str] Node))
+  (def str (_ffi :Elixir.Core.AST :str 1))
+
+  (spec key (-> [Symbol] Node))
+  (def key (_ffi :Elixir.Core.AST :key 1))
+
+  (spec lst (-> [Any] Node))
+  (def lst (_ffi :Elixir.Core.AST :list 1))
+
+  (spec ast-list (-> [Any] Node))
+  (def ast-list (_ffi :Elixir.Core.AST :list 1))
+
+  (spec tuple (-> [Any] Node))
+  (def tuple (_ffi :Elixir.Core.AST :tuple 1))
+
+  (spec map (-> [Any] Node))
+  (def map (_ffi :Elixir.Core.AST :map 1))
+
+  (spec module (-> [(U Symbol Str) Any] Node))
+  (def module (_ffi :Elixir.Core.AST :module 2))
+
+  ;; call é variádica (recebe cabeça e cauda de argumentos arbitrários)
+  (def call (fn [head | args] ((_ffi :Elixir.Core.AST :call 2) head args)))
+
+  ;; Predicados de nós da AST
+  (spec id? (-> [Any] Bool))
+  (def id? (_ffi :Elixir.Core.AST :identifier? 1))
+
+  (spec identifier? (-> [Any] Bool))
+  (def identifier? (_ffi :Elixir.Core.AST :identifier? 1))
+
+  (spec literal? (-> [Any] Bool))
+  (def literal? (_ffi :Elixir.Core.AST :literal? 1))
+
+  (spec list? (-> [Any] Bool))
+  (def list? (_ffi :Elixir.Core.AST :list? 1))
+
+  (spec tuple? (-> [Any] Bool))
+  (def tuple? (_ffi :Elixir.Core.AST :tuple? 1))
+
+  (spec map? (-> [Any] Bool))
+  (def map? (_ffi :Elixir.Core.AST :map? 1))
+
+  (spec module? (-> [Any] Bool))
+  (def module? (_ffi :Elixir.Core.AST :module? 1))
+
+  ;; Acessores de propriedades
+  (spec name (-> [Node] Any))
+  (def name (_ffi :Elixir.Core.AST :node_name 1))
+
+  (spec value (-> [Node] Any))
+  (def value (_ffi :Elixir.Core.AST :node_value 1))
+
+  (spec type (-> [Node] Any))
+  (def type (_ffi :Elixir.Core.AST :node_type 1))
+
+  (spec elements (-> [Node] Any))
+  (def elements (_ffi :Elixir.Core.AST :node_elements 1))
+
+  (spec pairs (-> [Node] Any))
+  (def pairs (_ffi :Elixir.Core.AST :node_pairs 1))
+
+  (spec meta (-> [Node] Any))
+  (def meta (_ffi :Elixir.Core.AST :node_meta 1))
+)
