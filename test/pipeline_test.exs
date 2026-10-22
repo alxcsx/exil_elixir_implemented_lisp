@@ -212,4 +212,34 @@ defmodule PipelineTest do
              (bar)
              """)
   end
+
+  describe "REPL-style sequential imports" do
+    test "imports persist across consecutive evaluations with :>" do
+      env = Pipeline.base_env()
+      assert {:ok, _results, env} = Pipeline.run("(import Ast :> ast)", env: env)
+      assert {:ok, [res], env} = Pipeline.run("(ast/id :val)", env: env)
+      assert %Core.AST.Identifier{name: :val} = res
+
+      assert {:ok, [res2], _env} = Pipeline.run("(ast/int 42)", env: env)
+      assert %Core.AST.Literal{type: :Int, value: 42} = res2
+    end
+
+    test "imports persist across consecutive evaluations with :as and as" do
+      env = Pipeline.base_env()
+      assert {:ok, _results, env} = Pipeline.run("(import Ast :as a1)", env: env)
+      assert {:ok, [res], env} = Pipeline.run("(a1/id :val1)", env: env)
+      assert %Core.AST.Identifier{name: :val1} = res
+
+      assert {:ok, _results, env} = Pipeline.run("(import Ast as a2)", env: env)
+      assert {:ok, [res2], _env} = Pipeline.run("(a2/id :val2)", env: env)
+      assert %Core.AST.Identifier{name: :val2} = res2
+    end
+
+    test "unqualified import persists across consecutive evaluations" do
+      env = Pipeline.base_env()
+      assert {:ok, _results, env} = Pipeline.run("(import Ast)", env: env)
+      assert {:ok, [res], _env} = Pipeline.run("(id :val3)", env: env)
+      assert %Core.AST.Identifier{name: :val3} = res
+    end
+  end
 end

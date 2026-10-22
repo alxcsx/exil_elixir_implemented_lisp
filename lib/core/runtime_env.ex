@@ -65,10 +65,24 @@ defmodule Core.RuntimeEnv do
       end
       |> Map.merge(compile_env.vars)
 
+    base_imports =
+      if compile_env.runtime_env do
+        Enum.uniq(compile_env.runtime_env.imports ++ compile_env.imports)
+      else
+        compile_env.imports
+      end
+
+    base_aliases =
+      if compile_env.runtime_env do
+        Map.merge(compile_env.runtime_env.aliases, compile_env.aliases)
+      else
+        compile_env.aliases
+      end
+
     %Core.RuntimeEnv{
       current_module: compile_env.current_module || :__main__,
-      imports: compile_env.imports,
-      aliases: compile_env.aliases,
+      imports: base_imports,
+      aliases: base_aliases,
       vars: base_vars,
       defs: base_defs
     }
@@ -115,7 +129,7 @@ defmodule Core.RuntimeEnv do
   defp resolve(%Core.RuntimeEnv{} = env, field, name) do
     case split_qualified(name) do
       {:qualified, prefix, local} ->
-        case Map.get(env.aliases, prefix) do
+        case find_alias(env, prefix) do
           nil -> nil
           mod -> lookup(env, field, {mod, local})
         end
@@ -127,6 +141,12 @@ defmodule Core.RuntimeEnv do
           lookup(env, field, {:Prelude, name}) ||
           lookup_imports(env, field, name)
     end
+  end
+
+  defp find_alias(nil, _prefix), do: nil
+
+  defp find_alias(%Core.RuntimeEnv{} = env, prefix) do
+    Map.get(env.aliases, prefix) || find_alias(env.parent, prefix)
   end
 
   defp split_qualified(name) when is_atom(name) do
@@ -141,8 +161,11 @@ defmodule Core.RuntimeEnv do
 
   defp split_qualified(_name), do: :local
 
-  defp lookup_imports(env, field, name) do
-    Enum.find_value(env.imports, fn mod -> lookup(env, field, {mod, name}) end)
+  defp lookup_imports(nil, _field, _name), do: nil
+
+  defp lookup_imports(%Core.RuntimeEnv{} = env, field, name) do
+    Enum.find_value(env.imports, fn mod -> lookup(env, field, {mod, name}) end) ||
+      lookup_imports(env.parent, field, name)
   end
 
   defp lookup(env, field, key) do

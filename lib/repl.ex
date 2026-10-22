@@ -24,12 +24,7 @@ defmodule REPL do
   defp eval_and_loop(code, env, opts) do
     case Pipeline.run(code, Keyword.put(opts, :env, env)) do
       {:ok, results, new_env} ->
-        output =
-          case results do
-            [single] -> single
-            multiple -> multiple
-          end
-
+        output = List.last(results)
         IO.puts("=> #{format_output(output)}")
         loop(new_env, opts)
 

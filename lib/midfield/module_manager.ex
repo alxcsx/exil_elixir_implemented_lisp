@@ -97,6 +97,7 @@ defmodule Midfield.ModuleManager do
   @doc "Monta o plano de compilação `[{módulo, arquivo}]` a partir das formas já parseadas da fonte."
   def build_plan(forms, env, opts \\ []) do
     with {:ok, env} <- ensure_discovered(opts[:std], env),
+         {:ok, env} <- ensure_discovered(opts[:root], env),
          {:ok, ctx} <- source_ctx(env, opts),
          {:ok, name} <- entry_name(ctx),
          {:ok, plan, env} <- plan_from_forms(name, forms, ctx, env, [], false) do
@@ -214,6 +215,13 @@ defmodule Midfield.ModuleManager do
     end)
   end
 
+  defguardp is_mod_node(node)
+            when (is_struct(node, Identifier) and node.name not in [nil, :":>"]) or
+                   (is_struct(node, Literal) and node.type == :Key)
+
+  defp mod_node_name(%Identifier{name: name}), do: name
+  defp mod_node_name(%Literal{type: :Key, value: val}), do: val
+
   defp resolve_form(
          %List{
            elements: [%Identifier{name: :import} = head, %Literal{type: :Str, value: rel} | rest]
@@ -227,9 +235,12 @@ defmodule Midfield.ModuleManager do
   end
 
   defp resolve_form(
-         %List{elements: [%Identifier{name: :import}, %Identifier{name: mod} | _]} = form,
+         %List{elements: [%Identifier{name: :import}, mod_node | _]} = form,
          ctx
-       ) do
+       )
+       when is_mod_node(mod_node) do
+    mod = mod_node_name(mod_node)
+
     cond do
       MapSet.member?(ctx.unit, mod) ->
         {:ok, form, []}
@@ -409,8 +420,9 @@ defmodule Midfield.ModuleManager do
     |> Enum.filter(&Map.has_key?(by_name, &1))
   end
 
-  defp imports_in(%List{elements: [%Identifier{name: :import}, %Identifier{name: mod} | _]}),
-    do: [mod]
+  defp imports_in(%List{elements: [%Identifier{name: :import}, mod_node | _]})
+       when is_mod_node(mod_node),
+       do: [mod_node_name(mod_node)]
 
   defp imports_in(_form), do: []
 

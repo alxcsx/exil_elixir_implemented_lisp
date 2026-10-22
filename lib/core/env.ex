@@ -121,7 +121,7 @@ defmodule Core.Env do
   defp resolve(env, field, name) do
     case split_qualified(name) do
       {:qualified, prefix, local} ->
-        case Map.get(env.aliases, prefix) do
+        case find_alias(env, prefix) do
           nil -> nil
           mod -> lookup(env, field, {mod, local})
         end
@@ -132,6 +132,12 @@ defmodule Core.Env do
           lookup(env, field, {:Prelude, name}) ||
           lookup_imports(env, field, name)
     end
+  end
+
+  defp find_alias(nil, _prefix), do: nil
+
+  defp find_alias(env, prefix) do
+    Map.get(env.aliases, prefix) || find_alias(env.parent, prefix)
   end
 
   # última barra separa prefixo e nome
@@ -147,9 +153,12 @@ defmodule Core.Env do
 
   defp split_qualified(_name), do: :local
 
-  # imports são do módulo, não da cadeia de escopos
+  # imports são do módulo e cadeia léxica
+  defp lookup_imports(nil, _field, _name), do: nil
+
   defp lookup_imports(env, field, name) do
-    Enum.find_value(env.imports, fn mod -> lookup(env, field, {mod, name}) end)
+    Enum.find_value(env.imports, fn mod -> lookup(env, field, {mod, name}) end) ||
+      lookup_imports(env.parent, field, name)
   end
 
   defp lookup(nil, _field, _key), do: nil

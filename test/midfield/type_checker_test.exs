@@ -427,4 +427,29 @@ defmodule Midfield.TypeCheckerTest do
       assert_error("(<: Invalido Int)", "tipo não declarado: Invalido")
     end
   end
+
+  describe "verificação estática de supertipagem com :>" do
+    test "avalia supertipagem estrutural em tempo de compilação" do
+      source = "(:> {:x {:a Int} :y {}} {:x {:a Int :b Int} :y {:m Int}})"
+
+      assert {:ok, %Core.AST.Module{body: [%Core.AST.Literal{type: :Key, value: true}]}, _env} =
+               check(source)
+    end
+
+    test "produz false quando o tipo não é supertipo" do
+      source = "(:> {:x {:a Int :b Int} :y {:m Int}} {:x {:a Int} :y {}})"
+
+      assert {:ok, %Core.AST.Module{body: [%Core.AST.Literal{type: :Key, value: false}]}, _env} =
+               check(source)
+    end
+
+    test "rejeita aridade incorreta de :>" do
+      assert_error("(:> Int)", ":> espera exatamente 2 argumentos")
+      assert_error("(:> Int Str Any)", ":> espera exatamente 2 argumentos")
+    end
+
+    test "rejeita tipo não declarado em :>" do
+      assert_error("(:> Invalido Int)", "tipo não declarado: Invalido")
+    end
+  end
 end

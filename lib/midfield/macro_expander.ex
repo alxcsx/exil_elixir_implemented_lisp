@@ -81,8 +81,25 @@ defmodule Midfield.MacroExpander do
         "unquote-splicing só pode ser usado dentro de quote em uma macro na linha #{node.meta[:line]}"
       )
 
-  def expand(%List{elements: [%Identifier{name: :import}, %Identifier{name: mod}]}, env, _depth) do
-    {nil, Env.import_module(env, mod)}
+  def expand(%List{elements: [%Identifier{name: :import}, mod_elem]}, env, _depth) do
+    if mod = module_name(mod_elem) do
+      new_env = Env.import_module(env, mod)
+
+      new_runtime_env =
+        if new_env.runtime_env do
+          %{
+            new_env.runtime_env
+            | imports: Enum.uniq(new_env.runtime_env.imports ++ [mod]),
+              aliases: Map.put_new(new_env.runtime_env.aliases, mod, mod)
+          }
+        else
+          nil
+        end
+
+      {nil, %{new_env | runtime_env: new_runtime_env}}
+    else
+      raise "módulo inválido no import"
+    end
   end
 
   def expand(
@@ -97,15 +114,35 @@ defmodule Midfield.MacroExpander do
         %List{
           elements: [
             %Identifier{name: :import},
-            %Identifier{name: mod},
-            %Identifier{name: :as},
-            %Identifier{name: alias_name}
+            mod_elem,
+            marker,
+            alias_elem
           ]
         },
         env,
         _depth
       ) do
-    {nil, Env.alias_module(env, alias_name, mod)}
+    mod = module_name(mod_elem)
+
+    if mod && alias_marker?(marker) && alias_target?(alias_elem) do
+      alias_name = extract_alias_name(alias_elem)
+
+      new_env = Env.alias_module(env, alias_name, mod)
+
+      new_runtime_env =
+        if new_env.runtime_env do
+          %{
+            new_env.runtime_env
+            | aliases: Map.put(new_env.runtime_env.aliases, alias_name, mod)
+          }
+        else
+          nil
+        end
+
+      {nil, %{new_env | runtime_env: new_runtime_env}}
+    else
+      raise "sintaxe de import com alias inválida"
+    end
   end
 
   def expand(%List{elements: [%Identifier{name: fn_name} = head | args]} = node, env, depth) do
@@ -367,4 +404,19 @@ defmodule Midfield.MacroExpander do
     do: %AST.Map{pairs: Enum.map(map, fn {k, v} -> {to_ast(k), to_ast(v)} end)}
 
   def to_ast(other), do: other
+
+  defp module_name(%Identifier{name: name}), do: name
+  defp module_name(%Literal{type: :Key, value: val}), do: val
+  defp module_name(_), do: nil
+
+  defp alias_marker?(%Identifier{name: name}) when name in [:as, :":>"], do: true
+  defp alias_marker?(%Literal{type: :Key, value: val}) when val in [:as, :>], do: true
+  defp alias_marker?(_), do: false
+
+  defp alias_target?(%Identifier{name: name}) when name not in [nil, :":>"], do: true
+  defp alias_target?(%Literal{type: :Key}), do: true
+  defp alias_target?(_), do: false
+
+  defp extract_alias_name(%Identifier{name: name}), do: name
+  defp extract_alias_name(%Literal{type: :Key, value: val}), do: val
 end

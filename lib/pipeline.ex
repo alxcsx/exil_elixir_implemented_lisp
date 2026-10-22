@@ -68,14 +68,16 @@ defmodule Pipeline do
   Compila um módulo através das fases:
   3. Desugar -> 4. Macro Expansion -> 5. Type Check -> 6. Backend
   """
-  def compile_module(module, mode, env) do
+  def compile_module(module, mode, env, opts \\ []) do
+    is_entry = Keyword.get(opts, :is_entry, module.name == (env.current_module || :__main__))
+
     module_env =
       %{
         Env.new(env)
         | current_module: module.name,
           file: module.meta[:file],
-          imports: [],
-          aliases: %{},
+          imports: if(is_entry, do: env.imports, else: []),
+          aliases: if(is_entry, do: env.aliases, else: %{}),
           runtime_env: env.runtime_env
       }
 
@@ -90,12 +92,33 @@ defmodule Pipeline do
   # --  Helpers
 
   defp compile_plan(plan, mode, env) do
-    Enum.reduce_while(plan, {:ok, [], env}, fn {module, path}, {:ok, acc, env} ->
-      case compile_module(module, mode, env) do
-        {:ok, result, env} ->
-          env = Env.mark_defined(env, module.name)
-          env = if path, do: Env.mark_loaded(env, path), else: env
-          {:cont, {:ok, [result | acc], env}}
+    entry_module =
+      case List.last(plan) do
+        {%Core.AST.Module{name: name}, _} -> name
+        _ -> env.current_module || :__main__
+      end
+
+    Enum.reduce_while(plan, {:ok, [], env}, fn {module, path}, {:ok, acc, current_env} ->
+      is_entry = module.name == entry_module
+
+      case compile_module(module, mode, current_env, is_entry: is_entry) do
+        {:ok, result, mod_env} ->
+          new_env =
+            if is_entry do
+              mod_env
+            else
+              %{
+                mod_env
+                | current_module: current_env.current_module,
+                  file: current_env.file,
+                  imports: current_env.imports,
+                  aliases: current_env.aliases
+              }
+            end
+
+          new_env = Env.mark_defined(new_env, module.name)
+          new_env = if path, do: Env.mark_loaded(new_env, path), else: new_env
+          {:cont, {:ok, [result | acc], new_env}}
 
         {:error, _} = error ->
           {:halt, error}
