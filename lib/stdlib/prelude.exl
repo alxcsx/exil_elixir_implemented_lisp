@@ -1,0 +1,7 @@
+(def-module prelude
+  (def-type Bool (U :true :false))
+  (def-type bool (U :true :false))
+
+  (spec not (-> [Any] Bool))
+  (def not (fn [x] (if x :false :true)))
+)
