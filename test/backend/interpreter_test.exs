@@ -272,13 +272,6 @@ defmodule Backend.InterpreterTest do
       assert {:ok, [true], _} = Pipeline.run("(<: Bool (u :true :false))")
       assert {:ok, [true], _} = Pipeline.run("(<: Bool (U :true :false))")
       assert {:ok, [10], _} = Pipeline.run("(if (<: :true Bool) 10 20)")
-
-      assert {:ok, [true], _} = Pipeline.run("(:> Bool :true)")
-      assert {:ok, [true], _} = Pipeline.run("(:> Bool :false)")
-      assert {:ok, [false], _} = Pipeline.run("(:> Bool :nil)")
-      assert {:ok, [true], _} = Pipeline.run("(:> Bool (u :true :false))")
-      assert {:ok, [true], _} = Pipeline.run("(:> (u :true :false) Bool)")
-      assert {:ok, [10], _} = Pipeline.run("(if (:> Bool :true) 10 20)")
     end
 
     test "variadic functions pack trailing arguments into a list via desugaring" do

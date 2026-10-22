@@ -215,13 +215,6 @@ defmodule Midfield.ModuleManager do
     end)
   end
 
-  defguardp is_mod_node(node)
-            when (is_struct(node, Identifier) and node.name not in [nil, :":>"]) or
-                   (is_struct(node, Literal) and node.type == :Key)
-
-  defp mod_node_name(%Identifier{name: name}), do: name
-  defp mod_node_name(%Literal{type: :Key, value: val}), do: val
-
   defp resolve_form(
          %List{
            elements: [%Identifier{name: :import} = head, %Literal{type: :Str, value: rel} | rest]
@@ -235,12 +228,9 @@ defmodule Midfield.ModuleManager do
   end
 
   defp resolve_form(
-         %List{elements: [%Identifier{name: :import}, mod_node | _]} = form,
+         %List{elements: [%Identifier{name: :import}, %Identifier{name: mod} | _]} = form,
          ctx
-       )
-       when is_mod_node(mod_node) do
-    mod = mod_node_name(mod_node)
-
+       ) do
     cond do
       MapSet.member?(ctx.unit, mod) ->
         {:ok, form, []}
@@ -420,9 +410,8 @@ defmodule Midfield.ModuleManager do
     |> Enum.filter(&Map.has_key?(by_name, &1))
   end
 
-  defp imports_in(%List{elements: [%Identifier{name: :import}, mod_node | _]})
-       when is_mod_node(mod_node),
-       do: [mod_node_name(mod_node)]
+  defp imports_in(%List{elements: [%Identifier{name: :import}, %Identifier{name: mod} | _]}),
+    do: [mod]
 
   defp imports_in(_form), do: []
 

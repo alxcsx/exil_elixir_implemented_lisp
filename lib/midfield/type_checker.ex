@@ -9,7 +9,6 @@ defmodule Midfield.TypeChecker do
   @collection_names [:list]
   @special_forms [
     :"<:",
-    :":>",
     :def,
     :fn,
     :let,
@@ -27,10 +26,6 @@ defmodule Midfield.TypeChecker do
   @reserved_names @collection_names ++ @special_forms ++ @primitive_types ++ @type_operators
   @unknown_binding %{type: :Any, arity: :unknown}
   @list_binding %{type: :Any, arity: :variadic}
-
-  defguardp is_supertype_op(op)
-            when (is_struct(op, AST.Literal) and op.type == :Key and op.value == :>) or
-                   (is_struct(op, Identifier) and op.name == :":>")
 
   def run(%AST.Module{} = module, env) do
     env = add_list_name(env)
@@ -249,24 +244,6 @@ defmodule Midfield.TypeChecker do
 
   defp check(%List{elements: [%Identifier{name: :"<:"} | _], meta: meta}, _env, _scope) do
     error("<: espera exatamente 2 argumentos", meta)
-  end
-
-  defp check(
-         %List{elements: [op, type1, type2], meta: meta},
-         env,
-         _scope
-       )
-       when is_supertype_op(op) do
-    with {:ok, parsed1} <- parse_type(type1, env),
-         {:ok, parsed2} <- parse_type(type2, env) do
-      result = compatible_types?(parsed2, parsed1)
-      {:ok, %AST.Literal{type: :Key, value: result, meta: meta}, env}
-    end
-  end
-
-  defp check(%List{elements: [op | _], meta: meta}, _env, _scope)
-       when is_supertype_op(op) do
-    error(":> espera exatamente 2 argumentos", meta)
   end
 
   defp check(%List{elements: [%Identifier{name: name} | _]} = node, _env, _scope)
@@ -553,21 +530,6 @@ defmodule Midfield.TypeChecker do
     case {parse_type(type1, env), parse_type(type2, env)} do
       {{:ok, t1}, {:ok, t2}} ->
         val = compatible_types?(t1, t2)
-        %{type: {:Symbol, val}, arity: :unknown}
-
-      _ ->
-        %{type: {:Union, [{:Symbol, true}, {:Symbol, false}]}, arity: :unknown}
-    end
-  end
-
-  defp binding_for(
-         %List{elements: [op, type1, type2]},
-         env
-       )
-       when is_supertype_op(op) do
-    case {parse_type(type1, env), parse_type(type2, env)} do
-      {{:ok, t1}, {:ok, t2}} ->
-        val = compatible_types?(t2, t1)
         %{type: {:Symbol, val}, arity: :unknown}
 
       _ ->
