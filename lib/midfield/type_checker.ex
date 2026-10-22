@@ -4,9 +4,11 @@ defmodule Midfield.TypeChecker do
   alias Core.AST
   alias Core.AST.{Identifier, List, Tuple}
   alias Core.Env
+  alias Core.Params
 
   @collection_names [:list]
   @special_forms [
+    :"<:",
     :def,
     :fn,
     :let,
@@ -20,7 +22,7 @@ defmodule Midfield.TypeChecker do
     :"def-module"
   ]
   @primitive_types [:Any, :Int, :Float, :Symbol, :Str, :List, :Tuple, :Map]
-  @type_operators [:U, :&]
+  @type_operators [:U, :u, :&]
   @reserved_names @collection_names ++ @special_forms ++ @primitive_types ++ @type_operators
   @unknown_binding %{type: :Any, arity: :unknown}
   @list_binding %{type: :Any, arity: :variadic}
@@ -81,6 +83,28 @@ defmodule Midfield.TypeChecker do
     with {:ok, next_env} <- check(type_form, env, :module) do
       check_module_forms(rest, next_env)
     end
+  end
+
+  defp check_module_forms(
+         [%List{elements: [%Identifier{name: :"<:"}, t1, t2], meta: meta} | rest],
+         env
+       ) do
+    with {:ok, parsed_t1} <- parse_type(t1, env),
+         {:ok, parsed_t2} <- parse_type(t2, env) do
+      result = if compatible_types?(parsed_t1, parsed_t2), do: true, else: false
+      rewritten = %AST.Literal{type: :Key, value: result, meta: meta}
+
+      with {:ok, checked_rest, final_env} <- check_module_forms(rest, env) do
+        {:ok, [rewritten | checked_rest], final_env}
+      end
+    end
+  end
+
+  defp check_module_forms(
+         [%List{elements: [%Identifier{name: :"<:"} | _], meta: meta} | _rest],
+         _env
+       ) do
+    error("<: espera exatamente 2 argumentos", meta)
   end
 
   defp check_module_forms([form | rest], env) do
@@ -159,11 +183,12 @@ defmodule Midfield.TypeChecker do
     do: error("declaração def fora do módulo ou inválida", node.meta)
 
   defp check(
-         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params} | body]},
+         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params} | body], meta: meta},
          env,
          _scope
        ) do
-    with {:ok, fn_env} <- bind_parameters(params, Env.new(env)),
+    with {:ok, parameter_shape} <- parse_parameters(params, meta),
+         {:ok, fn_env} <- bind_parameters(parameter_shape, Env.new(env)),
          {:ok, _} <- check_sequence(body, fn_env, :local) do
       {:ok, env}
     end
@@ -204,6 +229,24 @@ defmodule Midfield.TypeChecker do
   defp check(%List{elements: [%Identifier{name: :_ffi} | _]} = node, _env, _scope),
     do: error("forma _ffi inválida: esperado módulo, função e aridade não negativa", node.meta)
 
+  # O conteúdo de quote é dado, não uma expressão a resolver neste ponto.
+  defp check(%List{elements: [%Identifier{name: :quote}, _body]}, env, _scope), do: {:ok, env}
+
+  defp check(
+         %List{elements: [%Identifier{name: :"<:"}, type1, type2]},
+         env,
+         _scope
+       ) do
+    with {:ok, _parsed1} <- parse_type(type1, env),
+         {:ok, _parsed2} <- parse_type(type2, env) do
+      {:ok, env}
+    end
+  end
+
+  defp check(%List{elements: [%Identifier{name: :"<:"} | _], meta: meta}, _env, _scope) do
+    error("<: espera exatamente 2 argumentos", meta)
+  end
+
   defp check(%List{elements: [%Identifier{name: name} | _]} = node, _env, _scope)
        when name in @special_forms,
        do: error("forma especial inválida: #{name}", node.meta)
@@ -236,18 +279,21 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  # O conteúdo de quote é dado, não uma expressão a resolver neste ponto.
-  defp check(%AST.Quote{}, env, _scope), do: {:ok, env}
-  defp check(%AST.Unquote{body: body}, env, _scope), do: check(body, env, :expression)
-  defp check(%AST.Spread{expr: expr}, env, _scope), do: check(expr, env, :expression)
   defp check(%AST.Literal{}, env, _scope), do: {:ok, env}
 
   defp check_type_name(%Identifier{name: name, meta: meta}, env) do
     cond do
-      name in @reserved_names -> error("nome de tipo reservado: #{name}", meta)
-      Env.has_var?(env, name) -> error("nome de tipo coincide com variável: #{name}", meta)
-      Env.has_type?(env, name) -> error("tipo já declarado: #{name}", meta)
-      true -> :ok
+      name in @reserved_names ->
+        error("nome de tipo reservado: #{name}", meta)
+
+      Env.has_var?(env, name) ->
+        error("nome de tipo coincide com variável: #{name}", meta)
+
+      Map.has_key?(env.types, {env.current_module, name}) ->
+        error("tipo já declarado: #{name}", meta)
+
+      true ->
+        :ok
     end
   end
 
@@ -300,6 +346,14 @@ defmodule Midfield.TypeChecker do
   end
 
   defp bind_parameters(params, env) do
+    bind_parameter_shape(params.fixed, params.rest, env)
+  end
+
+  defp bind_parameters(params, env, types) do
+    bind_parameters(params.fixed, params.rest, env, types)
+  end
+
+  defp bind_parameter_shape(params, rest, env) do
     Enum.reduce_while(params, {:ok, env}, fn
       %Identifier{} = name, {:ok, current_env} ->
         case bind_name(name, current_env) do
@@ -310,9 +364,10 @@ defmodule Midfield.TypeChecker do
       _, {:ok, _} ->
         {:halt, {:error, "parâmetro de fn deve ser um identificador"}}
     end)
+    |> bind_rest_parameter(rest)
   end
 
-  defp bind_parameters(params, env, types) do
+  defp bind_parameters(params, nil, env, types) do
     params
     |> Enum.zip(types)
     |> Enum.reduce_while({:ok, env}, fn
@@ -326,6 +381,17 @@ defmodule Midfield.TypeChecker do
         {:halt, {:error, "parâmetro de fn deve ser um identificador"}}
     end)
   end
+
+  defp bind_parameters(_params, _rest, _env, _types),
+    do: {:error, "spec de função variádica ainda não é suportada"}
+
+  defp bind_rest_parameter({:ok, env}, nil), do: {:ok, env}
+
+  defp bind_rest_parameter({:ok, env}, rest) do
+    bind_name(rest, env, %{type: {:List, :Any}, arity: :unknown})
+  end
+
+  defp bind_rest_parameter(error, _rest), do: error
 
   defp bind_locals([], env), do: {:ok, env}
 
@@ -354,13 +420,25 @@ defmodule Midfield.TypeChecker do
          %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params} | body]},
          env
        ) do
-    result =
-      case bind_parameters(params, Env.new(env)) do
-        {:ok, fn_env} -> body |> Elixir.List.last() |> binding_for(fn_env) |> Map.fetch!(:type)
-        {:error, _} -> :Any
-      end
+    case Params.parse(params) do
+      {:ok, parameter_shape} ->
+        result =
+          case bind_parameters(parameter_shape, Env.new(env)) do
+            {:ok, fn_env} ->
+              body |> Elixir.List.last() |> binding_for(fn_env) |> Map.fetch!(:type)
 
-    %{type: {:Fn, Elixir.List.duplicate(:Any, length(params)), result}, arity: length(params)}
+            {:error, _} ->
+              :Any
+          end
+
+        %{
+          type: {:Fn, Elixir.List.duplicate(:Any, length(parameter_shape.fixed)), result},
+          arity: function_arity(parameter_shape)
+        }
+
+      {:error, _} ->
+        @unknown_binding
+    end
   end
 
   defp binding_for(
@@ -430,6 +508,20 @@ defmodule Midfield.TypeChecker do
     case Env.get_var(env, name) do
       %{type: _, arity: _} = binding -> binding
       _ -> @unknown_binding
+    end
+  end
+
+  defp binding_for(
+         %List{elements: [%Identifier{name: :"<:"}, type1, type2]},
+         env
+       ) do
+    case {parse_type(type1, env), parse_type(type2, env)} do
+      {{:ok, t1}, {:ok, t2}} ->
+        val = if compatible_types?(t1, t2), do: true, else: false
+        %{type: {:Symbol, val}, arity: :unknown}
+
+      _ ->
+        %{type: {:Union, [{:Symbol, true}, {:Symbol, false}]}, arity: :unknown}
     end
   end
 
@@ -555,9 +647,20 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp parse_type(%Identifier{name: name}, _env) when name in @primitive_types, do: {:ok, name}
+  @doc "Verifica se o tipo t1 é subtipo de t2."
+  def subtype?(t1_expr, t2_expr, env) do
+    with {:ok, t1} <- parse_type(t1_expr, env),
+         {:ok, t2} <- parse_type(t2_expr, env) do
+      {:ok, compatible_types?(t1, t2)}
+    end
+  end
 
-  defp parse_type(%Identifier{name: name, meta: meta}, env) do
+  def parse_type(type, _env) when is_atom(type) or (is_tuple(type) and not is_struct(type)),
+    do: {:ok, type}
+
+  def parse_type(%Identifier{name: name}, _env) when name in @primitive_types, do: {:ok, name}
+
+  def parse_type(%Identifier{name: name, meta: meta}, env) do
     case Env.get_type(env, name) do
       nil -> error("tipo não declarado: #{name}", meta)
       %{params: _} -> error("tipo genérico #{name} exige argumentos", meta)
@@ -565,21 +668,22 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp parse_type(%List{elements: [%Identifier{name: :List}, element]}, env) do
+  def parse_type(%List{elements: [%Identifier{name: :List}, element]}, env) do
     with {:ok, type} <- parse_type(element, env), do: {:ok, {:List, type}}
   end
 
-  defp parse_type(
-         %List{elements: [%Identifier{name: :->}, %Tuple{elements: arguments}, result]},
-         env
-       ) do
+  def parse_type(
+        %List{elements: [%Identifier{name: :->}, %Tuple{elements: arguments}, result]},
+        env
+      ) do
     with {:ok, argument_types} <- parse_types(arguments, env),
          {:ok, result_type} <- parse_type(result, env) do
       {:ok, {:Fn, argument_types, result_type}}
     end
   end
 
-  defp parse_type(%List{elements: [%Identifier{name: :U} | alternatives], meta: meta}, env) do
+  def parse_type(%List{elements: [%Identifier{name: name} | alternatives], meta: meta}, env)
+      when name in [:U, :u] do
     if alternatives == [] do
       error("união de tipos precisa de alternativas", meta)
     else
@@ -587,7 +691,7 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp parse_type(%List{elements: [%Identifier{name: :&} | requirements], meta: meta}, env) do
+  def parse_type(%List{elements: [%Identifier{name: :&} | requirements], meta: meta}, env) do
     if requirements == [] do
       error("interseção de tipos precisa de requisitos", meta)
     else
@@ -595,7 +699,7 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp parse_type(%List{elements: [%Identifier{name: name} | arguments], meta: meta}, env) do
+  def parse_type(%List{elements: [%Identifier{name: name} | arguments], meta: meta}, env) do
     case Env.get_type(env, name) do
       %{params: parameters, body: body} ->
         if length(arguments) == length(parameters) do
@@ -615,11 +719,11 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp parse_type(%Tuple{elements: elements}, env) do
+  def parse_type(%Tuple{elements: elements}, env) do
     with {:ok, types} <- parse_types(elements, env), do: {:ok, {:Tuple, types}}
   end
 
-  defp parse_type(%AST.Map{pairs: pairs}, env) do
+  def parse_type(%AST.Map{pairs: pairs}, env) do
     Enum.reduce_while(pairs, {:ok, %{}}, fn
       {%AST.Literal{type: :Key, value: key}, value}, {:ok, types} ->
         case parse_type(value, env) do
@@ -636,10 +740,13 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp parse_type(%AST.Literal{type: :Key, value: name}, _env),
+  def parse_type(%AST.Literal{type: :Key, value: name}, _env),
     do: {:ok, {:Symbol, name}}
 
-  defp parse_type(type, _env), do: error("tipo desconhecido ou ainda não suportado", type.meta)
+  def parse_type(type, _env) do
+    meta = if is_struct(type) or is_map(type), do: Map.get(type, :meta, %{}), else: %{}
+    error("tipo desconhecido ou ainda não suportado", meta)
+  end
 
   defp substitute_type({:type_var, name}, substitutions),
     do: Map.get(substitutions, name, :Any)
@@ -690,13 +797,15 @@ defmodule Midfield.TypeChecker do
          %{args: argument_types, result: result_type},
          meta
        ) do
-    if length(params) != length(argument_types) do
-      error("quantidade de parâmetros não corresponde à spec", meta)
-    else
-      with {:ok, fn_env} <- bind_parameters(params, Env.new(env), argument_types),
-           {:ok, checked_env} <- check_sequence(body, fn_env, :local),
-           :ok <- check_result_type(body, checked_env, result_type, meta) do
-        {:ok, env}
+    with {:ok, parameter_shape} <- parse_parameters(params, meta) do
+      if parameter_shape.rest || length(parameter_shape.fixed) != length(argument_types) do
+        error("quantidade de parâmetros não corresponde à spec", meta)
+      else
+        with {:ok, fn_env} <- bind_parameters(parameter_shape, Env.new(env), argument_types),
+             {:ok, checked_env} <- check_sequence(body, fn_env, :local),
+             :ok <- check_result_type(body, checked_env, result_type, meta) do
+          {:ok, env}
+        end
       end
     end
   end
@@ -807,19 +916,19 @@ defmodule Midfield.TypeChecker do
       else: {:error, {actual, expected}}
   end
 
-  defp compatible_types?(:Any, _expected), do: true
-  defp compatible_types?(_actual, :Any), do: true
+  def compatible_types?(:Any, _expected), do: true
+  def compatible_types?(_actual, :Any), do: true
 
-  defp compatible_types?({:Union, alternatives}, expected),
+  def compatible_types?({:Union, alternatives}, expected),
     do: Enum.all?(alternatives, &compatible_types?(&1, expected))
 
-  defp compatible_types?(actual, {:Union, alternatives}),
+  def compatible_types?(actual, {:Union, alternatives}),
     do: Enum.any?(alternatives, &compatible_types?(actual, &1))
 
-  defp compatible_types?(actual, {:Intersection, requirements}),
+  def compatible_types?(actual, {:Intersection, requirements}),
     do: Enum.all?(requirements, &compatible_types?(actual, &1))
 
-  defp compatible_types?({:Intersection, requirements}, expected) do
+  def compatible_types?({:Intersection, requirements}, expected) do
     Enum.any?(requirements, &compatible_types?(&1, expected)) or
       case merge_map_requirements(requirements) do
         {:ok, merged} -> compatible_types?({:Map, merged}, expected)
@@ -827,17 +936,17 @@ defmodule Midfield.TypeChecker do
       end
   end
 
-  defp compatible_types?({:Symbol, _value}, :Symbol), do: true
+  def compatible_types?({:Symbol, _value}, :Symbol), do: true
 
-  defp compatible_types?({:Tuple, actual}, {:Tuple, expected}) do
+  def compatible_types?({:Tuple, actual}, {:Tuple, expected}) do
     length(actual) == length(expected) and
       Enum.zip(actual, expected)
       |> Enum.all?(fn {element, required} -> compatible_types?(element, required) end)
   end
 
-  defp compatible_types?({:Tuple, _elements}, :Tuple), do: true
+  def compatible_types?({:Tuple, _elements}, :Tuple), do: true
 
-  defp compatible_types?({:Map, actual}, {:Map, expected}) do
+  def compatible_types?({:Map, actual}, {:Map, expected}) do
     Enum.all?(expected, fn {key, required_type} ->
       case Map.fetch(actual, key) do
         {:ok, actual_type} -> compatible_types?(actual_type, required_type)
@@ -846,22 +955,22 @@ defmodule Midfield.TypeChecker do
     end)
   end
 
-  defp compatible_types?({:Map, _fields}, :Map), do: true
+  def compatible_types?({:Map, _fields}, :Map), do: true
 
-  defp compatible_types?({:List, actual}, {:List, expected}),
+  def compatible_types?({:List, actual}, {:List, expected}),
     do: compatible_types?(actual, expected)
 
-  defp compatible_types?({:List, _element}, :List), do: true
+  def compatible_types?({:List, _element}, :List), do: true
 
-  defp compatible_types?({:Fn, actual_args, actual_result}, {:Fn, expected_args, expected_result}) do
+  def compatible_types?({:Fn, actual_args, actual_result}, {:Fn, expected_args, expected_result}) do
     length(actual_args) == length(expected_args) and
       Enum.zip(actual_args, expected_args)
       |> Enum.all?(fn {actual, expected} -> compatible_types?(expected, actual) end) and
       compatible_types?(actual_result, expected_result)
   end
 
-  defp compatible_types?(type, type), do: true
-  defp compatible_types?(_actual, _expected), do: false
+  def compatible_types?(type, type), do: true
+  def compatible_types?(_actual, _expected), do: false
 
   defp merge_map_requirements(types) do
     Enum.reduce_while(types, {:ok, %{}}, fn
@@ -883,6 +992,9 @@ defmodule Midfield.TypeChecker do
       %{arity: expected} when is_integer(expected) and expected != actual ->
         error("#{name} espera #{expected} argumento(s), recebeu #{actual}", meta)
 
+      %{arity: {:at_least, minimum}} when actual < minimum ->
+        error("#{name} espera ao menos #{minimum} argumento(s), recebeu #{actual}", meta)
+
       _ ->
         :ok
     end
@@ -892,6 +1004,9 @@ defmodule Midfield.TypeChecker do
     case binding_for(function, env) do
       %{arity: expected} when is_integer(expected) and expected != actual ->
         error("função anônima espera #{expected} argumento(s), recebeu #{actual}", meta)
+
+      %{arity: {:at_least, minimum}} when actual < minimum ->
+        error("função anônima espera ao menos #{minimum} argumento(s), recebeu #{actual}", meta)
 
       _ ->
         :ok
@@ -913,5 +1028,18 @@ defmodule Midfield.TypeChecker do
     end
   end
 
-  defp error(message, meta), do: {:error, "#{message} na linha #{Map.get(meta, :line, "?")}"}
+  defp error(message, meta) when is_map(meta),
+    do: {:error, "#{message} na linha #{Map.get(meta, :line, "?")}"}
+
+  defp error(message, _meta), do: {:error, message}
+
+  defp parse_parameters(parameters, meta) do
+    case Params.parse(parameters) do
+      {:ok, shape} -> {:ok, shape}
+      {:error, message} -> error(message, meta)
+    end
+  end
+
+  defp function_arity(%{fixed: fixed, rest: nil}), do: length(fixed)
+  defp function_arity(%{fixed: fixed}), do: {:at_least, length(fixed)}
 end

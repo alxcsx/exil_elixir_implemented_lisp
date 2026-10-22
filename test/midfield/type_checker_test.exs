@@ -10,9 +10,7 @@ defmodule Midfield.TypeCheckerTest do
     {:ok, forms} = Parser.SyntaxAnalyzer.run(tokens)
 
     prelude =
-      Enum.reduce([:+, :-, :*, :/, :**], %{Env.new() | current_module: :__main__}, fn name, env ->
-        Env.put_def(env, name, %{type: :Any, arity: 2})
-      end)
+      Core.Prelude.init(%{Env.new() | current_module: :__main__})
 
     module_env = Env.new(prelude)
 
@@ -105,6 +103,12 @@ defmodule Midfield.TypeCheckerTest do
       assert_error("(def f (fn [x y] x)) (f 1)", "f espera 2 argumento(s)")
       assert_error("(let [f (fn [x] x)] (f))", "f espera 1 argumento(s)")
       assert_error("((fn [x] x) 1 2)", "função anônima espera 1 argumento(s)")
+    end
+
+    test "funções com parâmetro final após | aceitam os argumentos restantes" do
+      checked!("(def first (fn [x | rest] x)) (first 1) (first 1 2 3)")
+      checked!("(let [first (fn [x | rest] x)] (first 1 2))")
+      assert_error("(def first (fn [x | rest] x)) (first)", "espera ao menos 1 argumento(s)")
     end
 
     test "um valor de tipo conhecido que não é função não pode ser chamado" do
@@ -389,6 +393,40 @@ defmodule Midfield.TypeCheckerTest do
           "(def use (fn [f] (f {:value \"ok\"})))"
 
       assert_error(source <> " (use candidate)", "argumento de use")
+    end
+  end
+
+  describe "verificação estática de subtipagem com <:" do
+    test "compara tipos de mapas com largura e profundidade e reescreve para :true" do
+      source = "(<: {:x {:a Int :b Int} :y {:m Int}} {:x {:a Int} :y {}})"
+
+      assert {:ok, %Core.AST.Module{body: [%Core.AST.Literal{type: :Key, value: true}]}, _env} =
+               check(source)
+    end
+
+    test "reescreve para :false quando não é subtipo" do
+      source = "(<: {:x {:a Int} :y {}} {:x {:a Int :b Int} :y {:m Int}})"
+
+      assert {:ok, %Core.AST.Module{body: [%Core.AST.Literal{type: :Key, value: false}]}, _env} =
+               check(source)
+    end
+
+    test "compara tipos nomeados com def-type" do
+      source =
+        "(def-type Narrow {:value Str}) (def-type Wide {:value Str :other Int}) " <>
+          "(<: Wide Narrow)"
+
+      assert {:ok, %Core.AST.Module{body: [%Core.AST.Literal{type: :Key, value: true}]}, _env} =
+               check(source)
+    end
+
+    test "rejeita aridade incorreta de <:" do
+      assert_error("(<: Int)", "<: espera exatamente 2 argumentos")
+      assert_error("(<: Int Str Any)", "<: espera exatamente 2 argumentos")
+    end
+
+    test "rejeita tipo não declarado em <:" do
+      assert_error("(<: Invalido Int)", "tipo não declarado: Invalido")
     end
   end
 end
