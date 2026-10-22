@@ -1,7 +1,7 @@
 defmodule PipelineTest do
   use ExUnit.Case, async: true
 
-  alias Core.AST.{DefMacro, Identifier, List, Literal, Module}
+  alias Core.AST.{Identifier, List, Literal, Module}
   alias Core.Env
 
   test "runs a file with loose expressions end to end" do
@@ -16,7 +16,7 @@ defmodule PipelineTest do
     assert {:ok, _results, env} =
              Pipeline.run("(def-module helpers (defmacro identity (x) x))")
 
-    assert %DefMacro{name: :identity} = Env.get_macro(env, :identity)
+    assert %{name: :identity} = Env.get_macro(env, :identity)
 
     assert {:ok, _results, env} =
              Pipeline.run("(def-module main (import helpers))", env: env)
@@ -170,11 +170,16 @@ defmodule PipelineTest do
            ] = main_body("(def a 1)")
   end
 
-  # Aguardando o MacroExpander consumir quote antes de entregar a AST ao checker.
-  # test "quote bodies stay raw data through the pipeline" do
-  #   assert [%Quote{body: %List{elements: [%Identifier{name: :def} | _]}}] =
-  #            main_body("(quote (def a 1))")
-  # end
+  test "quote bodies stay raw data through the pipeline" do
+    assert [
+             %List{
+               elements: [
+                 %Identifier{name: :quote},
+                 %List{elements: [%Identifier{name: :def} | _]}
+               ]
+             }
+           ] = main_body("(quote (def a 1))")
+  end
 
   test "defmacro forms are pruned by the expander and never reach the output" do
     # defmacro com args em parênteses também é reconhecido e podado

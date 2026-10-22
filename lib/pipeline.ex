@@ -8,14 +8,15 @@ defmodule Pipeline do
   """
 
   alias Core.Env
+  alias Core.Prelude
 
-  @arithmetic_names [:+, :-, :*, :/, :**]
-  @arithmetic_binding %{type: :Any, arity: 2}
+  @default_std Path.expand("stdlib", __DIR__)
 
   def run(source), do: run(source, [])
 
   def run(source, opts) when is_list(opts) do
-    env = Keyword.get(opts, :env, Env.new())
+    opts = Keyword.put_new(opts, :std, default_std())
+    env = Keyword.get(opts, :env, Prelude.init(Env.new()))
     mode = Keyword.get(opts, :mode, :interpret)
 
     with {:ok, plan, env} <- Midfield.ModuleManager.load_plan(source, env, opts) do
@@ -29,26 +30,29 @@ defmodule Pipeline do
   @doc "Lê o arquivo e compila com o env apontando para ele."
   def run_file(path, opts \\ []) do
     path = Path.expand(path)
+    opts = Keyword.put_new(opts, :std, default_std())
 
     with {:ok, source} <- File.read(path) do
-      env = Keyword.get(opts, :env, Env.new())
+      env = Keyword.get(opts, :env, Prelude.init(Env.new()))
       run(source, Keyword.put(opts, :env, %{env | file: path}))
     end
   end
 
+  defp default_std do
+    if File.dir?(@default_std), do: @default_std, else: nil
+  end
+
   @doc "Compila um módulo; devolve {:ok, resultado, env} ou {:error, motivo}."
   def compile_module(module, mode, env) do
-    prelude_env =
+    module_env =
       %{
         Env.new(env)
         | current_module: module.name,
           file: module.meta[:file],
           imports: [],
-          aliases: %{}
+          aliases: %{},
+          runtime_env: env.runtime_env
       }
-      |> with_arithmetic()
-
-    module_env = Env.new(prelude_env)
 
     with {:ok, expanded, module_env} <- Midfield.MacroExpander.run(module, module_env),
          {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(expanded, module_env),
@@ -58,16 +62,6 @@ defmodule Pipeline do
   end
 
   # --  Helpers
-
-  defp with_arithmetic(env) do
-    Enum.reduce(@arithmetic_names, env, fn name, current_env ->
-      if Env.get_def(current_env, name) do
-        current_env
-      else
-        Env.put_def(current_env, name, @arithmetic_binding)
-      end
-    end)
-  end
 
   defp compile_plan(plan, mode, env) do
     result =

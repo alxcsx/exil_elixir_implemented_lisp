@@ -8,8 +8,10 @@ defmodule CLI do
           compile: :boolean,
           target: :string,
           root: :string,
-          std: :string
-        ]
+          std: :string,
+          eval: :string
+        ],
+        aliases: [e: :eval]
       )
 
     mode = if opts[:compile], do: :compile, else: :interpret
@@ -17,6 +19,7 @@ defmodule CLI do
 
     cond do
       opts[:repl] -> REPL.start(pipeline_opts)
+      opts[:eval] -> run_eval(opts[:eval], pipeline_opts)
       length(files) > 0 -> run_file(hd(files), pipeline_opts)
       true -> IO.puts("Invalid Operation")
     end
@@ -24,6 +27,22 @@ defmodule CLI do
 
   defp root_opts(opts) do
     [root: opts[:root], std: opts[:std]] |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+  end
+
+  defp run_eval(code, opts) do
+    case Pipeline.run(code, opts) do
+      {:ok, results, _env} ->
+        output =
+          case results do
+            [single] -> single
+            multiple -> multiple
+          end
+
+        IO.puts("=> #{REPL.format_output(output)}")
+
+      {:error, err} ->
+        IO.puts("Compiler Error: #{inspect(err)}")
+    end
   end
 
   defp run_file(file, opts) do
