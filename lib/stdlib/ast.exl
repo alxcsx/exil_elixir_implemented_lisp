@@ -1,14 +1,11 @@
 (def-module Ast
   ;; Definições de tipos do AST
-  (def-type LiteralType (U :Int :Float :Str :Key))
+  (def-type LiteralType (U :Int :Float :Str :Key :Type))
   (def-type Node Any)
 
   ;; Construtores de nós da AST
   (spec id (-> [(U Symbol Str)] Node))
   (def id (_ffi :Elixir.Core.AST :identifier 1))
-
-  (spec identifier (-> [(U Symbol Str)] Node))
-  (def identifier (_ffi :Elixir.Core.AST :identifier 1))
 
   (spec literal (-> [Any LiteralType] Node))
   (def literal (_ffi :Elixir.Core.AST :literal 2))
@@ -28,9 +25,6 @@
   (spec lst (-> [Any] Node))
   (def lst (_ffi :Elixir.Core.AST :list 1))
 
-  (spec ast-list (-> [Any] Node))
-  (def ast-list (_ffi :Elixir.Core.AST :list 1))
-
   (spec tuple (-> [Any] Node))
   (def tuple (_ffi :Elixir.Core.AST :tuple 1))
 
@@ -47,14 +41,11 @@
   (spec id? (-> [Any] Bool))
   (def id? (_ffi :Elixir.Core.AST :identifier? 1))
 
-  (spec identifier? (-> [Any] Bool))
-  (def identifier? (_ffi :Elixir.Core.AST :identifier? 1))
-
   (spec literal? (-> [Any] Bool))
   (def literal? (_ffi :Elixir.Core.AST :literal? 1))
 
-  (spec list? (-> [Any] Bool))
-  (def list? (_ffi :Elixir.Core.AST :list? 1))
+  (spec lst? (-> [Any] Bool))
+  (def lst? (_ffi :Elixir.Core.AST :list? 1))
 
   (spec tuple? (-> [Any] Bool))
   (def tuple? (_ffi :Elixir.Core.AST :tuple? 1))

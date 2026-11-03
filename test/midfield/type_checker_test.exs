@@ -3,7 +3,7 @@ defmodule Midfield.TypeCheckerTest do
 
   alias Core.AST
   alias Core.Env
-  alias Midfield.{MacroExpander, TypeChecker}
+  alias Midfield.{Desugar, MacroExpander, TypeChecker}
 
   defp check(source) do
     {:ok, forms} = Parser.parse(source)
@@ -11,9 +11,9 @@ defmodule Midfield.TypeCheckerTest do
     prelude = %{Pipeline.base_env() | current_module: :__main__}
     module_env = Env.new(prelude)
 
-    with {:ok, desugared} <- Parser.Desugar.run(%AST.Module{name: :__main__, body: forms}),
-         {:ok, expanded, env} <- MacroExpander.run(desugared, module_env) do
-      TypeChecker.run(expanded, env)
+    with {:ok, expanded, env} <- MacroExpander.run(%AST.Module{name: :__main__, body: forms}, module_env),
+         {:ok, desugared} <- Desugar.run(expanded) do
+      TypeChecker.run(desugared, env)
     end
   end
 
@@ -63,6 +63,10 @@ defmodule Midfield.TypeCheckerTest do
     test "parâmetros de fn enxergam o módulo, não escapam e não podem repetir nomes" do
       checked!("(def offset 1) (fn [x] (+ x offset))")
       assert_error("(fn [x x] x)", "declaração duplicada de x")
+      assert_error("(fn [1] 1)", "parâmetros devem ser identificadores")
+      assert_error("(fn [def] def)", "identificador reservado def")
+      assert_error("(fn [Int] Int)", "identificador reservado Int")
+      assert_error("(def-type Custom Int) (fn [Custom] Custom)", "nome de variável coincide com tipo: Custom")
       assert_error("(fn [x] x) x", "identificador não declarado: x")
     end
 
@@ -74,8 +78,7 @@ defmodule Midfield.TypeCheckerTest do
     end
 
     test "tuplas e mapas validam usos" do
-      # quote será consumido antes do checker quando o contrato do MacroExpander estiver pronto.
-      # checked!("(quote missing)")
+      checked!("(quote missing)")
       assert_error("[missing]", "identificador não declarado: missing")
       assert_error("{:key missing}", "identificador não declarado: missing")
     end
@@ -84,7 +87,7 @@ defmodule Midfield.TypeCheckerTest do
   describe "aridade e chamadas" do
     test "o pipeline disponibiliza operações aritméticas no ambiente pai" do
       assert {:ok, _results, env} = Pipeline.run("(+ 1 2)")
-      assert %{type: {:Fn, [:Any, :Any], :Any}, arity: 2} = Env.get_var(env, :+)
+      assert %{type: {:Fn, [{:Union, [:Int, :Float]}, {:Union, [:Int, :Float]}], {:Union, [:Int, :Float]}}, arity: 2} = Env.get_var(env, :+)
     end
 
     test "operações aritméticas aceitam exatamente dois argumentos" do
@@ -254,7 +257,7 @@ defmodule Midfield.TypeCheckerTest do
 
     test "Any permite argumentos e retornos cujo tipo não é conhecido" do
       checked!("(spec f (-> [Any] Int)) (def f (fn [x] 1)) (f \"text\")")
-      checked!("(spec f (-> [Int] Int)) (def f (fn [x] (+ x 1)))")
+      checked!("(spec f (-> [Int] Num)) (def f (fn [x] (+ x 1)))")
     end
 
     test "aliases devem ser declarados antes do uso e não podem colidir com nomes existentes" do
@@ -425,6 +428,25 @@ defmodule Midfield.TypeCheckerTest do
 
     test "rejeita tipo não declarado em <:" do
       assert_error("(<: Invalido Int)", "tipo não declarado: Invalido")
+    end
+
+    test "função variádica chamada com aridade exata (zero argumentos no rest)" do
+      source = """
+      (def f (fn [a | rest] a))
+      (f 42)
+      """
+      assert {:ok, _module, _env} = check(source)
+    end
+
+    test "spec genérica com tipos parametrizados aninhados" do
+      source = """
+      (def-type (Box [T]) {:value T})
+      (spec make-box (<> [A] (-> [A] (Box A))))
+      (def make-box (fn [x] {:value x}))
+      (make-box 10)
+      """
+      assert {:ok, _module, env} = check(source)
+      assert is_map(env.vars)
     end
   end
 end

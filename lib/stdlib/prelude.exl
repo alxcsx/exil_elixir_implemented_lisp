@@ -1,10 +1,20 @@
 (def-module Prelude
   (def-type Bool (U :true :false))
+  (def-type Num (U Int Float))
 
+  (spec + (-> [Num Num] Num))
   (def + (_ffi :erlang :+ 2))
+
+  (spec - (-> [Num Num] Num))
   (def - (_ffi :erlang :- 2))
+
+  (spec * (-> [Num Num] Num))
   (def * (_ffi :erlang :* 2))
+
+  (spec / (-> [Int Int] Int))
   (def / (_ffi :erlang :div 2))
+
+  (spec ** (-> [Int Int] Int))
   (def ** (_ffi :Elixir.Integer :pow 2))
 
   (spec == (-> [Any Any] Bool))
@@ -25,6 +35,15 @@
   (spec >= (-> [Any Any] Bool))
   (def >= (_ffi :erlang :>= 2))
 
+  (def-macro defn [name params | body]
+    (quote (def (unquote name) (fn (unquote params) (unquote-splicing body)))))
+
   (spec not (-> [Any] Bool))
-  (def not (fn [x] (if x :false :true)))
+  (defn not [x] (if x :false :true))
+
+  (spec type-of (-> [Any] Any))
+  (def type-of (_ffi :Elixir.Core.Type :of_value 1))
+
+  (def-macro instance-of? [val target-type]
+    (quote (<: (type-of (unquote val)) (unquote target-type))))
 )

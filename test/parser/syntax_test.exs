@@ -110,20 +110,6 @@ defmodule SyntaxTest do
     end
   end
 
-  describe "Not Required, But Cool" do
-    @tag :nice_to_have
-    test "custom syntax for maps" do
-      assert [
-               %Map{
-                 pairs: [
-                   {%Literal{type: :Key, value: :a}, %Literal{type: :Int, value: 1}},
-                   {%Literal{type: :Key, value: :b}, %Literal{type: :Int, value: 2}}
-                 ]
-               }
-             ] = parse!("{ a: 1 b: 2 }")
-    end
-  end
-
   describe "Line Metadata" do
     test "injects line numbers correctly" do
       code = """
@@ -135,6 +121,45 @@ defmodule SyntaxTest do
                %List{meta: %{line: 1}},
                %List{meta: %{line: 2}}
              ] = parse!(code)
+    end
+  end
+
+  describe "Error Handling & Edge Cases" do
+    test "parses empty collections" do
+      assert [%List{elements: []}] = parse!("()")
+      assert [%Tuple{elements: []}] = parse!("[]")
+      assert [%Map{pairs: []}] = parse!("{}")
+    end
+
+    test "fails with unclosed parenthesis" do
+      assert {:error, msg} = Parser.parse("(def a 1")
+      assert msg =~ "faltou ')'"
+    end
+
+    test "fails with unclosed bracket" do
+      assert {:error, msg} = Parser.parse("[1 2")
+      assert msg =~ "faltou ']'"
+    end
+
+    test "fails with unclosed brace" do
+      assert {:error, msg} = Parser.parse("{:a 1")
+      assert msg =~ "faltou '}'"
+    end
+
+    test "fails with mismatched delimiters" do
+      # In Parser.SyntaxAnalyzer, encountering closer without opening raises unexpected closer
+      assert {:error, msg} = Parser.parse("([)]")
+      assert msg =~ "inesperado"
+    end
+
+    test "fails with odd number of elements in map" do
+      assert {:error, msg} = Parser.parse("{:a 1 :b}")
+      assert msg =~ "número ímpar"
+    end
+
+    test "fails with unexpected closing delimiter" do
+      assert {:error, msg} = Parser.parse(")")
+      assert msg =~ "inesperado"
     end
   end
 end

@@ -1,7 +1,7 @@
 defmodule PipelineTest do
   use ExUnit.Case, async: true
 
-  alias Core.AST.{Identifier, List, Literal, Module}
+  alias Core.AST.{Identifier, List, Literal, Module, Tuple}
   alias Core.Env
 
   test "runs a file with loose expressions end to end" do
@@ -14,7 +14,7 @@ defmodule PipelineTest do
 
   test "env accumulates module definitions and imports resolve across modules" do
     assert {:ok, _results, env} =
-             Pipeline.run("(def-module helpers (defmacro identity (x) x))")
+             Pipeline.run("(def-module helpers (def-macro identity [x] x))")
 
     assert %{name: :identity} = Env.get_macro(env, :identity)
 
@@ -151,9 +151,9 @@ defmodule PipelineTest do
 
     Enum.map(modules, fn module ->
       env = %{Core.Env.new(base) | current_module: module.name}
-      {:ok, desugared} = Parser.Desugar.run(module)
-      {:ok, expanded, _env} = Midfield.MacroExpander.run(desugared, env)
-      expanded
+      {:ok, expanded, _env} = Midfield.MacroExpander.run(module, env)
+      {:ok, desugared} = Midfield.Desugar.run(expanded)
+      desugared
     end)
   end
 
@@ -170,23 +170,43 @@ defmodule PipelineTest do
            ] = main_body("(def a 1)")
   end
 
-  test "quote bodies stay raw data through the pipeline" do
+  test "quote bodies are compiled into AST constructors by the macro expander" do
     assert [
              %List{
                elements: [
-                 %Identifier{name: :quote},
-                 %List{elements: [%Identifier{name: :def} | _]}
+                 %List{elements: [%Identifier{name: :_ffi} | _]} | _
                ]
              }
            ] = main_body("(quote (def a 1))")
+
+    assert {:ok, [quoted_def], _} = Pipeline.run("(quote (def a 1))")
+    assert %List{elements: [%Identifier{name: :def}, %Identifier{name: :a}, %Literal{value: 1}]} = quoted_def
   end
 
-  test "defmacro forms are pruned by the expander and never reach the output" do
-    # defmacro com args em parênteses também é reconhecido e podado
+  test "quote evaluates at runtime to first-class AST data structures" do
+    assert {:ok, [%Identifier{name: :hello}], _} = Pipeline.run("(quote hello)")
+    assert {:ok, [%Literal{type: :Int, value: 42}], _} = Pipeline.run("(quote 42)")
+    assert {:ok, [%Tuple{elements: [%Literal{value: 1}, %Literal{value: 2}]}], _} =
+             Pipeline.run("(quote [1 2])")
+
+    code = """
+    (def code (quote (+ 10 20)))
+    code
+    """
+    assert {:ok, [%List{elements: [%Identifier{name: :+}, %Literal{value: 10}, %Literal{value: 20}]}], _} =
+             Pipeline.run(code)
+  end
+
+  test "def-macro forms are pruned by the expander and never reach the output" do
     assert [%Module{name: :__main__, body: [def_form]}] =
-             build!("(defmacro identity (x) x)\n(def a 1)")
+             build!("(def-macro identity [x] x)\n(def a 1)")
 
     assert %List{elements: [%Identifier{name: :def} | _]} = def_form
+  end
+
+  test "def-macro with parenthesis syntax raises error" do
+    assert {:error, message} = Pipeline.run("(def-macro identity (x) x)")
+    assert message =~ "sintaxe inválida para def-macro"
   end
 
   test "no :__main__ module when the file has only def-module forms" do
@@ -229,6 +249,151 @@ defmodule PipelineTest do
       assert {:ok, _results, env} = Pipeline.run("(import Ast)", env: env)
       assert {:ok, [res], _env} = Pipeline.run("(id :val3)", env: env)
       assert %Core.AST.Identifier{name: :val3} = res
+    end
+  end
+
+  describe "Runtime reflection and subtyping (<:, type-of, instance-of?)" do
+    test "type-of returns canonical runtime types" do
+      assert {:ok, [:Int], _} = Pipeline.run("(type-of 42)")
+      assert {:ok, [:Float], _} = Pipeline.run("(type-of 3.14)")
+      assert {:ok, [:Str], _} = Pipeline.run("(type-of \"hello\")")
+      assert {:ok, [{:Symbol, :status}], _} = Pipeline.run("(type-of :status)")
+      assert {:ok, [{:Tuple, [:Int, :Int]}], _} = Pipeline.run("(type-of [1 2])")
+      assert {:ok, [{:List, :Int}], _} = Pipeline.run("(type-of (list 1 2 3))")
+      assert {:ok, [{:Map, %{a: :Int, b: :Str}}], _} = Pipeline.run("(type-of {:a 1 :b \"hi\"})")
+    end
+
+    test "dynamic <: evaluates at runtime" do
+      assert {:ok, [true], _} = Pipeline.run("(<: (type-of 42) Int)")
+      assert {:ok, [false], _} = Pipeline.run("(<: (type-of \"hello\") Int)")
+      assert {:ok, [true], _} = Pipeline.run("(<: (type-of 42) Num)")
+      assert {:ok, [true], _} = Pipeline.run("(<: (type-of 42) (type-of 100))")
+      assert {:ok, [false], _} = Pipeline.run("(<: (type-of 42) (type-of \"hello\"))")
+    end
+
+    test "instance-of? macro with primitives and union types" do
+      assert {:ok, [true], _} = Pipeline.run("(instance-of? 42 Int)")
+      assert {:ok, [false], _} = Pipeline.run("(instance-of? \"hello\" Int)")
+      assert {:ok, [true], _} = Pipeline.run("(instance-of? 42 Num)")
+      assert {:ok, [true], _} = Pipeline.run("(instance-of? 3.14 Num)")
+      assert {:ok, [false], _} = Pipeline.run("(instance-of? \"hello\" Num)")
+    end
+
+    test "instance-of? with custom records and structural subtyping" do
+      code = """
+      (def-type Plane {:id Int :model Str})
+      (def p {:id 1 :model "737" :airline "Gol"})
+      (def incomplete {:model "737"})
+      (list (instance-of? p Plane) (instance-of? incomplete Plane))
+      """
+
+      assert {:ok, [[true, false]], _} = Pipeline.run(code)
+    end
+
+    test "instance-of? with generic def-type" do
+      code = """
+      (def-type (Box [T]) {:val T})
+      (def b {:val 42})
+      (list (instance-of? b (Box Int)) (instance-of? b (Box Str)))
+      """
+
+      assert {:ok, [[true, false]], _} = Pipeline.run(code)
+    end
+
+    test "instance-of? inside functions and conditionals" do
+      code = """
+      (def classify (fn [x]
+        (if (instance-of? x Int) :is_int
+        (if (instance-of? x Str) :is_str :other))))
+      (list (classify 10) (classify "hello") (classify :foo))
+      """
+
+      assert {:ok, [[:is_int, :is_str, :other]], _} = Pipeline.run(code)
+    end
+  end
+
+  describe "defn macro in Prelude" do
+    test "defines functions with single expression body" do
+      code = """
+      (defn add [x y] (+ x y))
+      (add 10 32)
+      """
+      assert {:ok, [42], _} = Pipeline.run(code)
+    end
+
+    test "defines functions with multiple expressions in body" do
+      code = """
+      (defn calculate [x]
+        (+ x 1)
+        (let [y (+ x 10)]
+          (* y 2)))
+      (calculate 5)
+      """
+      assert {:ok, [30], _} = Pipeline.run(code)
+    end
+
+    test "supports variadic parameters in defn" do
+      code = """
+      (defn collect [head | tail] [head tail])
+      (collect 1 2 3)
+      """
+      assert {:ok, [{1, [2, 3]}], _} = Pipeline.run(code)
+    end
+
+    test "supports recursive functions in defn" do
+      code = """
+      (defn fact [n]
+        (if (<= n 1) 1 (* n (fact (- n 1)))))
+      (fact 5)
+      """
+      assert {:ok, [120], _} = Pipeline.run(code)
+    end
+
+    test "integrates with spec definitions" do
+      code = """
+      (spec double (-> [Int] Num))
+      (defn double [x] (+ x x))
+      (double 21)
+      """
+      assert {:ok, [42], _} = Pipeline.run(code)
+    end
+
+    test "not defined via defn inside Prelude works as expected" do
+      assert {:ok, [false], _} = Pipeline.run("(not :true)")
+      assert {:ok, [true], _} = Pipeline.run("(not :false)")
+      assert {:ok, [false], _} = Pipeline.run("(not 1)")
+      assert {:ok, [false], _} = Pipeline.run("(not \"hello\")")
+    end
+  end
+
+  describe "Prelude operators and functions" do
+    test "comparison operators !=, >, <=, >=" do
+      code = """
+      (list
+        (!= 1 2)
+        (!= 2 2)
+        (> 5 3)
+        (> 3 5)
+        (<= 3 3)
+        (<= 3 4)
+        (<= 4 3)
+        (>= 5 5)
+        (>= 6 5)
+        (>= 4 5)
+      )
+      """
+      assert {:ok, [[true, false, true, false, true, true, false, true, true, false]], _} = Pipeline.run(code)
+    end
+
+    test "structural equality on nested structures" do
+      code = """
+      (list
+        (== [1 {:a [2 3]}] [1 {:a [2 3]}])
+        (== [1 {:a [2 3]}] [1 {:a [2 4]}])
+        (== :nil :false)
+      )
+      """
+      assert {:ok, [[true, false, false]], _} = Pipeline.run(code)
     end
   end
 end

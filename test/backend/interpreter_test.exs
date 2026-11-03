@@ -57,7 +57,7 @@ defmodule Backend.InterpreterTest do
     end
 
     test "let binds local variables with sequential dependency" do
-      env = Env.new()
+      env = Interpreter.new_context()
       # (let [x 10 y (+ x 5)] (+ x y))
       let_form =
         lst([
@@ -69,17 +69,101 @@ defmodule Backend.InterpreterTest do
       assert {25, _} = Interpreter.eval(let_form, env)
     end
 
-    test "if evaluates conditionally" do
+    test "if evaluates conditionally and lazily" do
       env = Interpreter.new_context()
       true_form = lst([id(:if), key(true), int(1), int(2)])
       false_form = lst([id(:if), key(false), int(1), int(2)])
 
       assert {1, _} = Interpreter.eval(true_form, env)
       assert {2, _} = Interpreter.eval(false_form, env)
+
+      # Truthiness semantics: nil is falsy, truthy collections/zero
+      assert {2, _} = Interpreter.eval(lst([id(:if), key(nil), int(1), int(2)]), env)
+      assert {1, _} = Interpreter.eval(lst([id(:if), int(0), int(1), int(2)]), env)
+      assert {1, _} = Interpreter.eval(lst([id(:if), str(""), int(1), int(2)]), env)
+      assert {1, _} = Interpreter.eval(lst([id(:if), tup([]), int(1), int(2)]), env)
+
+      # Lazy evaluation: dead branch is not evaluated (division by zero would raise)
+      div_zero = lst([id(:/), int(10), int(0)])
+      assert {1, _} = Interpreter.eval(lst([id(:if), key(true), int(1), div_zero]), env)
+      assert {2, _} = Interpreter.eval(lst([id(:if), key(false), div_zero, int(2)]), env)
+    end
+
+    test "let evaluates bindings sequentially and supports multiple body expressions" do
+      env = Interpreter.new_context()
+
+      # (let [x 10 y (+ x 5)] (def a 1) (+ x y)) -> returns (+ x y)
+      multi_body_let =
+        lst([
+          id(:let),
+          tup([id(:x), int(10), id(:y), lst([id(:+), id(:x), int(5)])]),
+          int(999),
+          lst([id(:+), id(:x), id(:y)])
+        ])
+
+      assert {25, _} = Interpreter.eval(multi_body_let, env)
+    end
+
+    test "closures have lexical scope even when shadowed externally" do
+      env = Interpreter.new_context()
+
+      # (let [x 10] (let [f (fn [] x) x 20] (f)))
+      expr =
+        lst([
+          id(:let),
+          tup([id(:x), int(10)]),
+          lst([
+            id(:let),
+            tup([
+              id(:f),
+              lst([id(:fn), tup([]), id(:x)]),
+              id(:x),
+              int(20)
+            ]),
+            lst([id(:f)])
+          ])
+        ])
+
+      assert {10, _} = Interpreter.eval(expr, env)
+    end
+
+    test "recursive function parameter shadows function name" do
+      env = %{Interpreter.new_context() | current_module: :main}
+
+      # (def f (fn [f] f))
+      # (f 42) -> should return 42 without recursion loop
+      def_f =
+        lst([
+          id(:def),
+          id(:f),
+          lst([id(:fn), tup([id(:f)]), id(:f)])
+        ])
+
+      {_closure, env} = Interpreter.eval(def_f, env)
+      assert {42, _} = Interpreter.eval(lst([id(:f), int(42)]), env)
+    end
+
+    test "arithmetic runtime edge cases" do
+      env = Interpreter.new_context()
+
+      # Division by zero raises ArithmeticError
+      assert_raise ArithmeticError, fn ->
+        Interpreter.eval(lst([id(:/), int(10), int(0)]), env)
+      end
+
+      # Power 0
+      assert {1, _} = Interpreter.eval(lst([id(:**), int(5), int(0)]), env)
+
+      # Mixed arithmetic int + float via erlang +
+      assert {3.5, _} =
+               Interpreter.eval(
+                 lst([id(:+), int(1), %Literal{type: :Float, value: 2.5}]),
+                 env
+               )
     end
 
     test "fn closures execute with lexical scoping" do
-      env = Env.new()
+      env = Interpreter.new_context()
       # ((fn [x] (+ x 10)) 5)
       fn_call = lst([lst([id(:fn), tup([id(:x)]), lst([id(:+), id(:x), int(10)])]), int(5)])
 
@@ -87,7 +171,7 @@ defmodule Backend.InterpreterTest do
     end
 
     test "recursive functions work via def" do
-      env = %{Env.new() | current_module: :main}
+      env = %{Interpreter.new_context() | current_module: :main}
 
       # (def fact (fn [n] (if (== n 0) 1 (* n (fact (- n 1))))))
       def_fact =
@@ -136,10 +220,10 @@ defmodule Backend.InterpreterTest do
     test "quasiquote expands unquote and unquote-splicing in MacroExpander" do
       env = Env.new()
 
-      # (defmacro qq [x items] (quote (+ (unquote x) (unquote-splicing items))))
+      # (def-macro qq [x items] (quote (+ (unquote x) (unquote-splicing items))))
       macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:qq),
           tup([id(:x), id(:items)]),
           lst([
@@ -172,115 +256,6 @@ defmodule Backend.InterpreterTest do
       assert_raise RuntimeError, ~r/variável não definida: quote/, fn ->
         Interpreter.eval(qq_form, env)
       end
-    end
-
-    test "macros can use compile-time if conditionals and computation" do
-      env = Env.new()
-
-      # (defmacro choose [flag val]
-      #   (if flag
-      #     (quote (+ (unquote val) 10))
-      #     (quote (+ (unquote val) 20))))
-      macro =
-        lst([
-          id(:defmacro),
-          id(:choose),
-          tup([id(:flag), id(:val)]),
-          lst([
-            id(:if),
-            id(:flag),
-            lst([id(:quote), lst([id(:+), lst([id(:unquote), id(:val)]), int(10)])]),
-            lst([id(:quote), lst([id(:+), lst([id(:unquote), id(:val)]), int(20)])])
-          ])
-        ])
-
-      {nil, env} = MacroExpander.expand(macro, env)
-
-      # (choose :true 5) expands to (+ 5 10)
-      assert {%AST.List{elements: [_, %AST.Literal{value: 5}, %AST.Literal{value: 10}]}, _} =
-               MacroExpander.expand(lst([id(:choose), key(true), int(5)]), env)
-
-      # (choose :false 5) expands to (+ 5 20)
-      assert {%AST.List{elements: [_, %AST.Literal{value: 5}, %AST.Literal{value: 20}]}, _} =
-               MacroExpander.expand(lst([id(:choose), key(false), int(5)]), env)
-    end
-
-    test "macros can compute values at expansion time" do
-      env = Env.new()
-
-      # (defmacro compile-sum [a b]
-      #   (+ a b))
-      macro =
-        lst([
-          id(:defmacro),
-          id(:compile_sum),
-          tup([id(:a), id(:b)]),
-          lst([id(:+), id(:a), id(:b)])
-        ])
-
-      {nil, env} = MacroExpander.expand(macro, env)
-
-      # (compile-sum 3 4) expands to literal 7
-      assert {%AST.Literal{type: :Int, value: 7}, _} =
-               MacroExpander.expand(lst([id(:compile_sum), int(3), int(4)]), env)
-    end
-  end
-
-  describe "Pipeline integration" do
-    test "evaluates whole programs through Pipeline.run" do
-      assert {:ok, [15], _env} = Pipeline.run("(+ 5 10)")
-      assert {:ok, [30], _env} = Pipeline.run("(def a 10) (def b 20) (+ a b)")
-    end
-
-    test "evaluates subtyping check with <:" do
-      code = """
-      (<: 
-        {:x {:a Int :b Int} :y {:m Int}}
-        {:x {:a Int} :y {}}
-      )
-      """
-
-      assert {:ok, [true], _env} = Pipeline.run(code)
-
-      false_code = """
-      (<: 
-        {:x {:a Int} :y {}}
-        {:x {:a Int :b Int} :y {:m Int}}
-      )
-      """
-
-      assert {:ok, [false], _env} = Pipeline.run(false_code)
-    end
-
-    test "functions and macros work together in Pipeline.run" do
-      code = """
-      (defmacro add-five [x]
-        (quote (+ (unquote x) 5)))
-
-      (def inc (fn [x] (add-five x)))
-      (inc 10)
-      """
-
-      assert {:ok, [15], _env} = Pipeline.run(code)
-    end
-
-    test "subtyping with prelude Bool and union (u :true :false)" do
-      assert {:ok, [true], _} = Pipeline.run("(<: :true Bool)")
-      assert {:ok, [true], _} = Pipeline.run("(<: :false Bool)")
-      assert {:ok, [false], _} = Pipeline.run("(<: :nil Bool)")
-      assert {:ok, [true], _} = Pipeline.run("(<: (u :true :false) Bool)")
-      assert {:ok, [true], _} = Pipeline.run("(<: Bool (u :true :false))")
-      assert {:ok, [true], _} = Pipeline.run("(<: Bool (U :true :false))")
-      assert {:ok, [10], _} = Pipeline.run("(if (<: :true Bool) 10 20)")
-    end
-
-    test "variadic functions pack trailing arguments into a list via desugaring" do
-      code = """
-      (def collect (fn [head | tail] [head tail]))
-      [(collect 1) (collect 1 2 3)]
-      """
-
-      assert {:ok, [{{1, []}, {1, [2, 3]}}], _} = Pipeline.run(code)
     end
   end
 end

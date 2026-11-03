@@ -18,7 +18,7 @@ defmodule Stdlib.AstTest do
       code = """
       (import Ast as ast)
 
-      (defmacro make-sum [a b]
+      (def-macro make-sum [a b]
         (ast/call (ast/id :+) a b))
 
       (def compute (fn [x] (make-sum x (ast/int 40))))
@@ -33,7 +33,7 @@ defmodule Stdlib.AstTest do
       code = """
       (import Ast as ast)
 
-      (defmacro make-sum-list [a b]
+      (def-macro make-sum-list [a b]
         (ast/call (ast/id :+) [a b]))
 
       (def compute (fn [x] (make-sum-list x (ast/int 10))))
@@ -49,11 +49,12 @@ defmodule Stdlib.AstTest do
       (import Ast as ast)
       (def t (ast/tuple [(ast/int 1) (ast/int 2)]))
       (def m (ast/map {:a (ast/int 10)}))
-      [(ast/tuple? t) (ast/map? m)]
+      (def l (ast/lst [(ast/int 1)]))
+      [(ast/tuple? t) (ast/map? m) (ast/lst? l)]
       """
 
       assert {:ok, results, _env} = Pipeline.run(code)
-      assert {true, true} = List.last(results)
+      assert {true, true, true} = List.last(results)
     end
 
     test "type checker enforces specs on Ast functions" do

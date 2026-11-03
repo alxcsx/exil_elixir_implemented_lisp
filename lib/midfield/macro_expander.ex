@@ -1,18 +1,16 @@
 defmodule Midfield.MacroExpander do
   @moduledoc """
-  Fase de macro: reconhece `defmacro`, `quote`, `unquote` e
+  Fase de macro: reconhece `def-macro`, `quote`, `unquote` e
   `unquote-splicing`, expandindo chamadas de macros procedurais.
   """
   alias Core.Env
   alias Core.AST
   alias Core.AST.{List, Identifier, Literal, Tuple}
-  alias Parser.Desugar
 
   @max_expansion_depth 128
 
   def run(%AST.Module{body: trees} = root, env) do
     try do
-      trees = Desugar.desugar!(trees)
       {expanded_trees, final_env} = expand_list(trees, env)
       {:ok, %AST.Module{root | body: expanded_trees}, final_env}
     rescue
@@ -22,7 +20,7 @@ defmodule Midfield.MacroExpander do
 
   def run(ast, env) do
     try do
-      {expanded, final_env} = expand(Desugar.desugar!(ast), env)
+      {expanded, final_env} = expand(ast, env)
       {:ok, expanded, final_env}
     rescue
       e in RuntimeError -> {:error, e.message}
@@ -35,67 +33,56 @@ defmodule Midfield.MacroExpander do
     {filtered_nodes, final_env}
   end
 
-  def expand(ast, env), do: expand(Desugar.desugar!(ast), env, 0)
+  def expand(ast, env), do: expand(ast, env, 0)
 
   def expand(
         %List{
           elements: [
-            %Identifier{name: :defmacro},
+            %Identifier{name: :"def-macro"},
             %Identifier{name: macro_name},
-            %Tuple{elements: params, meta: tuple_meta} | body
-          ]
+            %Tuple{} = params_tuple | body
+          ],
+          meta: meta
         } = node,
         env,
         _depth
       ) do
     if body == [] do
-      raise "macro #{macro_name} deve ter pelo menos um corpo na linha #{node.meta[:line]}"
+      raise "macro #{macro_name} deve ter pelo menos um corpo na linha #{meta[:line]}"
     end
 
-    {fixed, rest} =
-      case tuple_meta[:variadic] do
-        nil -> {params, nil}
-        fixed_count -> {Enum.take(params, fixed_count), Elixir.List.last(params)}
-      end
-
+    {fixed, rest} = parse_macro_params!(params_tuple, meta)
     macro_node = %{name: macro_name, args: fixed, rest: rest, body: body, meta: node.meta}
 
     {nil, Env.put_macro(env, macro_name, macro_node)}
   end
 
-  def expand(%List{elements: [%Identifier{name: :defmacro} | _]} = node, _env, _depth) do
-    raise "sintaxe inválida para defmacro na linha #{node.meta[:line]}"
+  def expand(%List{elements: [%Identifier{name: :"def-macro"} | _]} = node, _env, _depth) do
+    raise "sintaxe inválida para def-macro na linha #{node.meta[:line]}"
   end
 
-  # Quote fora de macro é dado bruto.
-  def expand(%List{elements: [%Identifier{name: :quote}, _body]} = node, env, _depth),
-    do: {node, env}
+  def expand(%List{elements: [%Identifier{name: :quote}, template]}, env, _depth) do
+    compiled = compile_quote(template, env)
+    expand(compiled, env, 0)
+  end
+
+  def expand(%List{elements: [%Identifier{name: :quote} | args], meta: meta}, _env, _depth) do
+    raise "quote espera exatamente 1 argumento na linha #{line_of(meta)}, recebeu #{length(args)}"
+  end
 
   def expand(%List{elements: [%Identifier{name: :unquote} | _]} = node, _env, _depth),
     do:
-      raise("unquote só pode ser usado dentro de quote em uma macro na linha #{node.meta[:line]}")
+      raise("unquote só pode ser usado dentro de quote na linha #{line_of(node.meta)}")
 
   def expand(%List{elements: [%Identifier{name: :"unquote-splicing"} | _]} = node, _env, _depth),
     do:
       raise(
-        "unquote-splicing só pode ser usado dentro de quote em uma macro na linha #{node.meta[:line]}"
+        "unquote-splicing só pode ser usado dentro de quote na linha #{line_of(node.meta)}"
       )
 
   def expand(%List{elements: [%Identifier{name: :import}, %Identifier{name: mod}]}, env, _depth) do
     new_env = Env.import_module(env, mod)
-
-    new_runtime_env =
-      if new_env.runtime_env do
-        %{
-          new_env.runtime_env
-          | imports: Enum.uniq(new_env.runtime_env.imports ++ [mod]),
-            aliases: Map.put_new(new_env.runtime_env.aliases, mod, mod)
-        }
-      else
-        nil
-      end
-
-    {nil, %{new_env | runtime_env: new_runtime_env}}
+    {nil, new_env}
   end
 
   def expand(
@@ -119,18 +106,7 @@ defmodule Midfield.MacroExpander do
         _depth
       ) do
     new_env = Env.alias_module(env, alias_name, mod)
-
-    new_runtime_env =
-      if new_env.runtime_env do
-        %{
-          new_env.runtime_env
-          | aliases: Map.put(new_env.runtime_env.aliases, alias_name, mod)
-        }
-      else
-        nil
-      end
-
-    {nil, %{new_env | runtime_env: new_runtime_env}}
+    {nil, new_env}
   end
 
   def expand(%List{elements: [%Identifier{name: fn_name} = head | args]} = node, env, depth) do
@@ -139,7 +115,7 @@ defmodule Midfield.MacroExpander do
     end
 
     if Env.has_macro?(env, fn_name) do
-      apply_macro(fn_name, args, env) |> Desugar.desugar!() |> expand(env, depth + 1)
+      apply_macro(fn_name, args, env) |> expand(env, depth + 1)
     else
       {expanded_args, new_env} = expand_list(args, env)
       {%List{node | elements: [head | expanded_args]}, new_env}
@@ -226,8 +202,31 @@ defmodule Midfield.MacroExpander do
       |> Core.RuntimeEnv.put_vars(bindings)
 
     compiled_body = Enum.map(macro_node.body, &expand_macro_body(&1, parent_env))
-    {result, _} = Backend.Interpreter.eval_sequence(compiled_body, child_env)
-    to_ast(result)
+
+    eval_fun =
+      case Keyword.get(parent_env.opts, :macro_engine) do
+        fun when is_function(fun, 2) ->
+          fun
+
+        :interpreter ->
+          &Backend.Interpreter.eval_sequence/2
+
+        mod when is_atom(mod) and not is_nil(mod) ->
+          if Code.ensure_loaded?(mod) and function_exported?(mod, :eval_sequence, 2) do
+            &mod.eval_sequence/2
+          else
+            raise "macro_engine #{inspect(mod)} não exporta eval_sequence/2"
+          end
+
+        nil ->
+          raise "nenhum macro_engine configurado em Env.opts para executar a macro #{macro_name}"
+
+        other ->
+          raise "macro_engine inválido: #{inspect(other)}"
+      end
+
+    {result, _} = eval_fun.(compiled_body, child_env)
+    Core.AST.to_ast(result)
   end
 
   # -- Expansão de `quote` e chamadas variádicas dentro do corpo da macro
@@ -290,12 +289,12 @@ defmodule Midfield.MacroExpander do
 
   defp compile_quote(%List{elements: elements, meta: meta}, env) do
     chunks = Enum.map(elements, &compile_quote_element(&1, env))
-    macro_ffi(:build_list, [make_list(chunks), meta])
+    macro_ffi(:build_list, [make_list(chunks), make_meta_node(meta)])
   end
 
   defp compile_quote(%Tuple{elements: elements, meta: meta}, env) do
     chunks = Enum.map(elements, &compile_quote_element(&1, env))
-    macro_ffi(:build_tuple, [make_list(chunks), meta])
+    macro_ffi(:build_tuple, [make_list(chunks), make_meta_node(meta)])
   end
 
   defp compile_quote(%AST.Map{pairs: pairs, meta: meta}, env) do
@@ -304,18 +303,42 @@ defmodule Midfield.MacroExpander do
         make_list([compile_quote(k, env), compile_quote(v, env)])
       end)
 
-    macro_ffi(:build_map, [make_list(compiled_pairs), meta])
+    macro_ffi(:build_map, [make_list(compiled_pairs), make_meta_node(meta)])
+  end
+
+  defp compile_quote(%Identifier{name: name}, _env) do
+    macro_ffi(:identifier, [%Literal{type: :Key, value: name}])
+  end
+
+  defp compile_quote(%Literal{type: :Int, value: val}, _env) do
+    macro_ffi(:int, [%Literal{type: :Int, value: val}])
+  end
+
+  defp compile_quote(%Literal{type: :Float, value: val}, _env) do
+    macro_ffi(:float, [%Literal{type: :Float, value: val}])
+  end
+
+  defp compile_quote(%Literal{type: :Str, value: val}, _env) do
+    macro_ffi(:str, [%Literal{type: :Str, value: val}])
+  end
+
+  defp compile_quote(%Literal{type: :Key, value: val}, _env) do
+    macro_ffi(:key, [%Literal{type: :Key, value: val}])
+  end
+
+  defp compile_quote(%Literal{type: :Type, value: val}, _env) do
+    macro_ffi(:type_literal, [%Literal{type: :Key, value: val}])
   end
 
   defp compile_quote(leaf, _env) do
-    macro_ffi(:unwrap_leaf, [{:quoted_leaf, leaf}])
+    macro_ffi(:to_ast, [leaf])
   end
 
   defp compile_quote_element(
          %List{elements: [%Identifier{name: :"unquote-splicing"}, expr], meta: meta},
          env
        ) do
-    macro_ffi(:splice_items, [expand_macro_body(expr, env), meta])
+    macro_ffi(:splice_items, [expand_macro_body(expr, env), make_meta_node(meta)])
   end
 
   defp compile_quote_element(
@@ -329,11 +352,32 @@ defmodule Midfield.MacroExpander do
     make_list([compile_quote(elem, env)])
   end
 
+  defp make_meta_node(meta) when is_map(meta) do
+    pairs =
+      meta
+      |> Enum.filter(fn {k, _v} -> is_atom(k) end)
+      |> Enum.map(fn {k, v} ->
+        val_node =
+          cond do
+            is_integer(v) -> %Literal{type: :Int, value: v}
+            is_float(v) -> %Literal{type: :Float, value: v}
+            is_atom(v) -> %Literal{type: :Key, value: v}
+            true -> %Literal{type: :Str, value: to_string(v)}
+          end
+
+        {%Literal{type: :Key, value: k}, val_node}
+      end)
+
+    %AST.Map{pairs: pairs, meta: %{}}
+  end
+
+  defp make_meta_node(_), do: %AST.Map{pairs: [], meta: %{}}
+
   defp macro_ffi(fun, args) do
     ffi = %List{
       elements: [
         %Identifier{name: :_ffi},
-        %Literal{type: :Key, value: __MODULE__},
+        %Literal{type: :Key, value: Core.AST},
         %Literal{type: :Key, value: fun},
         %Literal{type: :Int, value: length(args)}
       ]
@@ -346,50 +390,49 @@ defmodule Midfield.MacroExpander do
     %List{elements: [%Identifier{name: :list} | elements], meta: meta}
   end
 
+  defp parse_macro_params!(%Tuple{elements: parameters}, meta) do
+    {fixed, tail} = Enum.split_while(parameters, &identifier?/1)
+
+    case tail do
+      [] ->
+        check_unique_params!(fixed, meta)
+        {fixed, nil}
+
+      [%Identifier{name: :|}, %Identifier{name: rest_name} = rest] when rest_name != :| ->
+        check_unique_params!(fixed ++ [rest], meta)
+        {fixed, rest}
+
+      _ ->
+        raise_at(
+          "parâmetros devem ser identificadores, com | apenas antes do parâmetro final",
+          meta
+        )
+    end
+  end
+
+  defp check_unique_params!(identifiers, meta) do
+    names = Enum.map(identifiers, & &1.name)
+
+    case names -- Enum.uniq(names) do
+      [] ->
+        :ok
+
+      [dup | _] ->
+        dup_node = Enum.find(identifiers, &(&1.name == dup))
+        raise_at("declaração duplicada de #{dup}", dup_node.meta || meta)
+    end
+  end
+
+  defp identifier?(%Identifier{name: name}) when name != :|, do: true
+  defp identifier?(_), do: false
+
+  defp raise_at(message, meta) do
+    case line_of(meta) do
+      "?" -> raise message
+      line -> raise "#{message} na linha #{line}"
+    end
+  end
+
   defp line_of(meta) when is_map(meta), do: Map.get(meta, :line, "?")
   defp line_of(_), do: "?"
-
-  # -- Construtores chamados na avaliação do quote expandido
-
-  @doc false
-  def unwrap_leaf({:quoted_leaf, leaf}), do: leaf
-
-  @doc false
-  def build_list(chunks, meta), do: %List{elements: :lists.append(chunks), meta: meta}
-
-  @doc false
-  def build_tuple(chunks, meta), do: %Tuple{elements: :lists.append(chunks), meta: meta}
-
-  @doc false
-  def build_map(pairs, meta) do
-    %AST.Map{pairs: Enum.map(pairs, fn [k, v] -> {k, v} end), meta: meta}
-  end
-
-  @doc false
-  def splice_items(%Tuple{elements: items}, _meta), do: items
-  def splice_items(%List{elements: items}, _meta), do: items
-  def splice_items(list, _meta) when is_list(list), do: Enum.map(list, &to_ast/1)
-
-  def splice_items(tuple, _meta) when is_tuple(tuple),
-    do: tuple |> :erlang.tuple_to_list() |> Enum.map(&to_ast/1)
-
-  def splice_items(_other, meta) do
-    raise "unquote-splicing espera lista ou tupla na linha #{line_of(meta)}"
-  end
-
-  # Conversão de valores em AST pós-expansão
-  def to_ast(%_struct{} = ast) when is_struct(ast), do: ast
-  def to_ast(val) when is_integer(val), do: %Literal{type: :Int, value: val}
-  def to_ast(val) when is_float(val), do: %Literal{type: :Float, value: val}
-  def to_ast(val) when is_binary(val), do: %Literal{type: :Str, value: val}
-  def to_ast(val) when is_atom(val), do: %Literal{type: :Key, value: val}
-  def to_ast(list) when is_list(list), do: %List{elements: Enum.map(list, &to_ast/1)}
-
-  def to_ast(tuple) when is_tuple(tuple),
-    do: %Tuple{elements: tuple |> :erlang.tuple_to_list() |> Enum.map(&to_ast/1)}
-
-  def to_ast(%{} = map),
-    do: %AST.Map{pairs: Enum.map(map, fn {k, v} -> {to_ast(k), to_ast(v)} end)}
-
-  def to_ast(other), do: other
 end

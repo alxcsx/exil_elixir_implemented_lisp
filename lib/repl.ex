@@ -60,19 +60,34 @@ defmodule REPL do
     end
   end
 
-  defp is_balanced?(str) do
-    counts =
-      String.graphemes(str)
-      |> Enum.reduce({0, 0, 0}, fn
-        "(", {p, b, c} -> {p + 1, b, c}
-        ")", {p, b, c} -> {p - 1, b, c}
-        "[", {p, b, c} -> {p, b + 1, c}
-        "]", {p, b, c} -> {p, b - 1, c}
-        "{", {p, b, c} -> {p, b, c + 1}
-        "}", {p, b, c} -> {p, b, c - 1}
-        _, acc -> acc
-      end)
-
-    counts == {0, 0, 0}
+  def is_balanced?(str) when is_binary(str) do
+    str
+    |> String.to_charlist()
+    |> count_brackets({0, 0, 0}, :normal)
   end
+
+  defp count_brackets([], {p, b, c}, :normal), do: p <= 0 and b <= 0 and c <= 0
+  defp count_brackets([], _counts, _state), do: false
+
+  # In comment: ignores everything until newline
+  defp count_brackets([?\n | rest], counts, :comment), do: count_brackets(rest, counts, :normal)
+  defp count_brackets([_ | rest], counts, :comment), do: count_brackets(rest, counts, :comment)
+
+  # In string: handle escaped quotes and closing quote
+  defp count_brackets([?\\, _ | rest], counts, :string), do: count_brackets(rest, counts, :string)
+  defp count_brackets([?" | rest], counts, :string), do: count_brackets(rest, counts, :normal)
+  defp count_brackets([_ | rest], counts, :string), do: count_brackets(rest, counts, :string)
+
+  # Normal mode
+  defp count_brackets([?; | rest], counts, :normal), do: count_brackets(rest, counts, :comment)
+  defp count_brackets([?" | rest], counts, :normal), do: count_brackets(rest, counts, :string)
+
+  defp count_brackets([?( | rest], {p, b, c}, :normal), do: count_brackets(rest, {p + 1, b, c}, :normal)
+  defp count_brackets([?) | rest], {p, b, c}, :normal), do: count_brackets(rest, {p - 1, b, c}, :normal)
+  defp count_brackets([?[ | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b + 1, c}, :normal)
+  defp count_brackets([?] | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b - 1, c}, :normal)
+  defp count_brackets([?{ | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b, c + 1}, :normal)
+  defp count_brackets([?} | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b, c - 1}, :normal)
+
+  defp count_brackets([_ | rest], counts, :normal), do: count_brackets(rest, counts, :normal)
 end

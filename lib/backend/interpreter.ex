@@ -219,7 +219,7 @@ defmodule Backend.Interpreter do
       end
 
       args =
-        if mod in [Core.AST, Midfield.MacroExpander],
+        if mod == Core.AST,
           do: args,
           else: Enum.map(args, &unwrap_literal/1)
       apply(mod, fun, args)

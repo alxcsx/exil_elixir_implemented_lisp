@@ -28,13 +28,13 @@ defmodule Midfield.MacroExpanderTests do
                MacroExpander.expand(ast, env)
     end
 
-    test "defmacro stores definition in Env" do
+    test "def-macro stores definition in Env" do
       env = Env.new(macro_engine: :interpreter)
 
-      # (defmacro identity [x] x)
+      # (def-macro identity [x] x)
       macro_ast =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:identity),
           tup([id(:x)]),
           id(:x)
@@ -51,13 +51,13 @@ defmodule Midfield.MacroExpanderTests do
       assert {[], _env} = MacroExpander.expand_list([macro_ast], env)
     end
 
-    test "defmacro is removed from the AST after evaluated" do
+    test "def-macro is removed from the AST after evaluated" do
       env = Env.new(macro_engine: :interpreter)
 
-      # (defmacro identity (x) x)
+      # (def-macro identity (x) x)
       macro_ast =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:identity),
           tup([id(:x)]),
           lst([id(:x)])
@@ -66,12 +66,13 @@ defmodule Midfield.MacroExpanderTests do
       assert {[], _env} = MacroExpander.expand_list([macro_ast], env)
     end
 
-    test "quote wraps its body without expanding inner nodes" do
+    test "quote compiles its template into AST constructors without evaluating inner nodes" do
       env = Env.new()
       # (quote (+ 1 2))
       ast = lst([id(:quote), lst([id(:+), int(1), int(2)])])
 
-      assert {^ast, _env} = MacroExpander.expand(ast, env)
+      assert {%AST.List{elements: [%AST.List{elements: [%AST.Identifier{name: :_ffi} | _]} | _]}, _env} =
+               MacroExpander.expand(ast, env)
     end
 
     test "template macros splice their raw AST arguments" do
@@ -79,7 +80,7 @@ defmodule Midfield.MacroExpanderTests do
 
       macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:unless),
           tup([id(:condition), id(:body)]),
           lst([
@@ -112,7 +113,7 @@ defmodule Midfield.MacroExpanderTests do
     test "template macros splice tuple elements into a quoted list" do
       macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:begin),
           tup([id(:forms)]),
           lst([
@@ -141,7 +142,7 @@ defmodule Midfield.MacroExpanderTests do
     test "macro rest parameters bind the remaining raw AST arguments" do
       macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:begin),
           tup([id(:first), id(:|), id(:rest)]),
           lst([
@@ -192,7 +193,7 @@ defmodule Midfield.MacroExpanderTests do
     test "a macro body can return one of its arguments directly" do
       env = Env.new(macro_engine: :interpreter)
 
-      # (defmacro identity (x) x)
+      # (def-macro identity (x) x)
       macro_def = %{name: :identity, args: [id(:x)], rest: nil, body: [id(:x)]}
 
       env = Env.put_macro(env, :identity, macro_def)
@@ -207,7 +208,7 @@ defmodule Midfield.MacroExpanderTests do
 
       macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:inc),
           tup([id(:x)]),
           lst([id(:quote), lst([id(:+), lst([id(:unquote), id(:x)]), int(1)])])
@@ -237,7 +238,7 @@ defmodule Midfield.MacroExpanderTests do
 
       loop_macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:loop_forever),
           tup([]),
           lst([id(:quote), lst([id(:loop_forever)])])
@@ -250,15 +251,15 @@ defmodule Midfield.MacroExpanderTests do
       end
     end
 
-    test "rejects malformed defmacro forms" do
+    test "rejects malformed def-macro forms" do
       env = Env.new()
 
-      assert_raise RuntimeError, ~r/sintaxe inválida para defmacro/, fn ->
-        MacroExpander.expand(lst([id(:defmacro)]), env)
+      assert_raise RuntimeError, ~r/sintaxe inválida para def-macro/, fn ->
+        MacroExpander.expand(lst([id(:"def-macro")]), env)
       end
 
-      assert_raise RuntimeError, ~r/sintaxe inválida para defmacro/, fn ->
-        MacroExpander.expand(lst([id(:defmacro), int(123), tup([id(:x)]), id(:x)]), env)
+      assert_raise RuntimeError, ~r/sintaxe inválida para def-macro/, fn ->
+        MacroExpander.expand(lst([id(:"def-macro"), int(123), tup([id(:x)]), id(:x)]), env)
       end
     end
 
@@ -267,7 +268,7 @@ defmodule Midfield.MacroExpanderTests do
 
       bad_unquote_macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:bad),
           tup([]),
           lst([id(:quote), lst([id(:foo), lst([id(:unquote)])])])
@@ -285,7 +286,7 @@ defmodule Midfield.MacroExpanderTests do
 
       inner_macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:inner),
           tup([id(:x)]),
           lst([id(:quote), lst([id(:+), lst([id(:unquote), id(:x)]), int(1)])])
@@ -293,7 +294,7 @@ defmodule Midfield.MacroExpanderTests do
 
       outer_macro =
         lst([
-          id(:defmacro),
+          id(:"def-macro"),
           id(:outer),
           tup([id(:x)]),
           lst([id(:quote), lst([id(:inner), lst([id(:unquote), id(:x)])])])
@@ -324,6 +325,109 @@ defmodule Midfield.MacroExpanderTests do
 
       assert {:error, msg} = MacroExpander.run(bad_module, env)
       assert msg =~ "unquote só pode"
+    end
+
+    test "quasiquote expands unquote and unquote-splicing inside tuples" do
+      env = Env.new()
+
+      # (def-macro wrap-tup [x items] (quote [(unquote x) (unquote-splicing items)]))
+      macro =
+        lst([
+          id(:"def-macro"),
+          id(:wrap_tup),
+          tup([id(:x), id(:items)]),
+          lst([
+            id(:quote),
+            tup([
+              lst([id(:unquote), id(:x)]),
+              lst([id(:"unquote-splicing"), id(:items)])
+            ])
+          ])
+        ])
+
+      {nil, env} = MacroExpander.expand(macro, env)
+
+      call = lst([id(:wrap_tup), int(42), tup([int(1), int(2)])])
+      assert {%AST.Tuple{
+                elements: [
+                  %AST.Literal{value: 42},
+                  %AST.Literal{value: 1},
+                  %AST.Literal{value: 2}
+                ]
+              }, _} = MacroExpander.expand(call, env)
+    end
+
+    test "quasiquote expands unquote inside maps" do
+      env = Env.new()
+
+      # (def-macro wrap-map [val] (quote {:result (unquote val)}))
+      macro =
+        lst([
+          id(:"def-macro"),
+          id(:wrap_map),
+          tup([id(:val)]),
+          lst([
+            id(:quote),
+            map_node([
+              {%AST.Literal{type: :Key, value: :result}, lst([id(:unquote), id(:val)])}
+            ])
+          ])
+        ])
+
+      {nil, env} = MacroExpander.expand(macro, env)
+
+      call = lst([id(:wrap_map), int(99)])
+      assert {%AST.Map{
+                pairs: [
+                  {%AST.Literal{type: :Key, value: :result}, %AST.Literal{value: 99}}
+                ]
+              }, _} = MacroExpander.expand(call, env)
+    end
+
+    test "variadic macro with 0 extra arguments binds empty list to rest" do
+      env = Env.new()
+
+      # (def-macro var-m [head | tail] (quote [(unquote head) (unquote tail)]))
+      macro =
+        lst([
+          id(:"def-macro"),
+          id(:var_m),
+          tup([id(:head), id(:|), id(:tail)]),
+          lst([
+            id(:quote),
+            tup([lst([id(:unquote), id(:head)]), lst([id(:unquote), id(:tail)])])
+          ])
+        ])
+
+      {nil, env} = MacroExpander.expand(macro, env)
+
+      # Called with just 1 arg -> rest should be empty list/tuple
+      call = lst([id(:var_m), int(10)])
+      assert {%AST.Tuple{
+                elements: [
+                  %AST.Literal{value: 10},
+                  %AST.List{elements: []}
+                ]
+              }, _} = MacroExpander.expand(call, env)
+    end
+
+    test "macro arity error raises RuntimeError" do
+      env = Env.new()
+
+      # (def-macro fixed [a b] (quote (+ (unquote a) (unquote b))))
+      macro =
+        lst([
+          id(:"def-macro"),
+          id(:fixed),
+          tup([id(:a), id(:b)]),
+          lst([id(:quote), lst([id(:+), lst([id(:unquote), id(:a)]), lst([id(:unquote), id(:b)])])])
+        ])
+
+      {nil, env} = MacroExpander.expand(macro, env)
+
+      assert_raise RuntimeError, ~r/expected 2 arguments, got 1/i, fn ->
+        MacroExpander.expand(lst([id(:fixed), int(1)]), env)
+      end
     end
   end
 end

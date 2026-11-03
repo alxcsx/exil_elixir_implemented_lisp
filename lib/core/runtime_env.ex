@@ -2,15 +2,8 @@ defmodule Core.RuntimeEnv do
   @moduledoc """
   Ambiente de execução (runtime) do interpretador.
 
-  Diferente do `Core.Env` (ambiente de compilação que rastreia módulos,
-  macros, tipos e metadados de análise estática), o `RuntimeEnv` gerencia
-  estritamente o estado de execução com valores Elixir avaliados:
-  - `vars`: valores de variáveis no escopo léxico
-  - `defs`: definições de módulo `{módulo, nome} => valor`
-  - `imports`: módulos importados
-  - `aliases`: aliases de módulos
-  - `parent`: escopo léxico pai
-  - `current_module`: módulo corrente
+  Gerencia o estado de execução com valores Elixir avaliados (`vars` e `defs`),
+  reutilizando a resolução de escopo, imports e aliases de `Core.Env`.
   """
 
   alias Core.Env
@@ -34,62 +27,24 @@ defmodule Core.RuntimeEnv do
     }
   end
 
-  def new(%Env{} = compile_env) do
-    from_compile_env(compile_env)
-  end
+  def new(%Env{} = compile_env), do: from_compile_env(compile_env)
 
   def new(opts) when is_list(opts) do
-    current_module = Keyword.get(opts, :current_module, :__main__)
-    base_defs = Keyword.get(opts, :defs, default_defs())
-
     %Core.RuntimeEnv{
-      current_module: current_module,
-      defs: base_defs
+      current_module: Keyword.get(opts, :current_module, :__main__),
+      defs: Keyword.get(opts, :defs, %{})
     }
   end
 
   @doc "Cria um RuntimeEnv a partir do ambiente de compilação (Core.Env)."
-  def from_compile_env(%Env{} = compile_env) do
-    base_defs =
-      if compile_env.runtime_env do
-        compile_env.runtime_env.defs
-      else
-        default_defs()
-      end
-
-    base_vars =
-      if compile_env.runtime_env do
-        compile_env.runtime_env.vars
-      else
-        %{}
-      end
-      |> Map.merge(compile_env.vars)
-
-    base_imports =
-      if compile_env.runtime_env do
-        Enum.uniq(compile_env.runtime_env.imports ++ compile_env.imports)
-      else
-        compile_env.imports
-      end
-
-    base_aliases =
-      if compile_env.runtime_env do
-        Map.merge(compile_env.runtime_env.aliases, compile_env.aliases)
-      else
-        compile_env.aliases
-      end
-
+  def from_compile_env(%Env{runtime_env: rt} = compile_env) do
     %Core.RuntimeEnv{
       current_module: compile_env.current_module || :__main__,
-      imports: base_imports,
-      aliases: base_aliases,
-      vars: base_vars,
-      defs: base_defs
+      imports: compile_env.imports,
+      aliases: compile_env.aliases,
+      vars: (rt && rt.vars) || %{},
+      defs: (rt && rt.defs) || %{}
     }
-  end
-
-  defp default_defs do
-    Pipeline.base_env().runtime_env.defs
   end
 
   # -- Variáveis locais
@@ -97,21 +52,19 @@ defmodule Core.RuntimeEnv do
   def get_var(nil, _key), do: nil
 
   def get_var(%Core.RuntimeEnv{} = env, key) when is_atom(key) do
-    case fetch_lookup(env, :vars, key) do
+    case Env.fetch_lookup(env, :vars, key) do
       {:ok, val} -> val
-      :error -> resolve(env, :defs, key)
+      :error -> Env.resolve(env, :defs, key)
     end
   end
 
-  def get_var(%Core.RuntimeEnv{} = env, key), do: lookup(env, :vars, key)
+  def get_var(%Core.RuntimeEnv{} = env, key), do: Env.lookup(env, :vars, key)
 
-  def put_var(%Core.RuntimeEnv{} = env, key, val) do
-    %{env | vars: Map.put(env.vars, key, val)}
-  end
+  def put_var(%Core.RuntimeEnv{} = env, key, val),
+    do: %{env | vars: Map.put(env.vars, key, val)}
 
-  def put_vars(%Core.RuntimeEnv{} = env, new_vars) do
-    %{env | vars: Map.merge(env.vars, new_vars)}
-  end
+  def put_vars(%Core.RuntimeEnv{} = env, new_vars),
+    do: %{env | vars: Map.merge(env.vars, new_vars)}
 
   def has_var?(%Core.RuntimeEnv{} = env, key), do: not is_nil(get_var(env, key))
 
@@ -122,65 +75,5 @@ defmodule Core.RuntimeEnv do
     Map.update!(env, :defs, &Map.put(&1, {mod, name}, val))
   end
 
-  def get_def(%Core.RuntimeEnv{} = env, name), do: resolve(env, :defs, name)
-
-  # -- Resolução interna
-
-  defp resolve(%Core.RuntimeEnv{} = env, field, name) do
-    case split_qualified(name) do
-      {:qualified, prefix, local} ->
-        case find_alias(env, prefix) do
-          nil -> nil
-          mod -> lookup(env, field, {mod, local})
-        end
-
-      :local ->
-        lookup(env, field, {env.current_module, name}) ||
-          lookup(env, field, {nil, name}) ||
-          lookup(env, field, {:__main__, name}) ||
-          lookup(env, field, {:Prelude, name}) ||
-          lookup_imports(env, field, name)
-    end
-  end
-
-  defp find_alias(nil, _prefix), do: nil
-
-  defp find_alias(%Core.RuntimeEnv{} = env, prefix) do
-    Map.get(env.aliases, prefix) || find_alias(env.parent, prefix)
-  end
-
-  defp split_qualified(name) when is_atom(name) do
-    {prefix, [local]} = name |> Atom.to_string() |> String.split("/") |> Enum.split(-1)
-
-    if prefix == [] or local == "" or Enum.any?(prefix, &(&1 == "")) do
-      :local
-    else
-      {:qualified, prefix |> Enum.join("/") |> String.to_atom(), String.to_atom(local)}
-    end
-  end
-
-  defp split_qualified(_name), do: :local
-
-  defp lookup_imports(nil, _field, _name), do: nil
-
-  defp lookup_imports(%Core.RuntimeEnv{} = env, field, name) do
-    Enum.find_value(env.imports, fn mod -> lookup(env, field, {mod, name}) end) ||
-      lookup_imports(env.parent, field, name)
-  end
-
-  defp lookup(env, field, key) do
-    case fetch_lookup(env, field, key) do
-      {:ok, val} -> val
-      :error -> nil
-    end
-  end
-
-  defp fetch_lookup(nil, _field, _key), do: :error
-
-  defp fetch_lookup(env, field, key) do
-    case Map.fetch(Map.fetch!(env, field), key) do
-      {:ok, val} -> {:ok, val}
-      :error -> fetch_lookup(env.parent, field, key)
-    end
-  end
+  def get_def(%Core.RuntimeEnv{} = env, name), do: Env.resolve(env, :defs, name)
 end

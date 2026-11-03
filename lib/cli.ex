@@ -47,8 +47,17 @@ defmodule CLI do
 
   defp run_file(file, opts) do
     case Pipeline.run_file(file, opts) do
-      {:ok, result, _env} -> IO.puts("=> #{inspect(result)}")
-      {:error, err} -> IO.puts("Compiler Error: #{inspect(err)}")
+      {:ok, results, _env} ->
+        output =
+          case results do
+            [single] -> single
+            multiple -> multiple
+          end
+
+        IO.puts("=> #{REPL.format_output(output)}")
+
+      {:error, err} ->
+        IO.puts("Compiler Error: #{inspect(err)}")
     end
   end
 end

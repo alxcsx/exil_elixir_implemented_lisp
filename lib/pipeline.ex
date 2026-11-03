@@ -10,11 +10,11 @@ defmodule Pipeline do
           ▼  2. Module Identification (Midfield.ModuleManager)
       Módulos & Plano de Compilação
           │
-          ▼  3. Desugar (Parser.Desugar)
-      AST Normalizada
-          │
-          ▼  4. Macro Expansion (Midfield.MacroExpander)
+          ▼  3. Macro Expansion (Midfield.MacroExpander)
       AST Expandida
+          │
+          ▼  4. Desugar (Midfield.Desugar)
+      AST Normalizada
           │
           ▼  5. Type Check (Midfield.TypeChecker)
       AST Tipada
@@ -29,8 +29,13 @@ defmodule Pipeline do
   @prelude_file Path.join(@default_std, "prelude.exl")
 
   def base_env do
+    base_compile_env = %{
+      Env.new(macro_engine: &Backend.Interpreter.eval_sequence/2)
+      | runtime_env: %Core.RuntimeEnv{}
+    }
+
     {:ok, _, env} =
-      run_file(@prelude_file, env: %{Env.new() | runtime_env: %Core.RuntimeEnv{}}, std: nil)
+      run_file(@prelude_file, env: base_compile_env, std: nil)
 
     env
   end
@@ -66,7 +71,7 @@ defmodule Pipeline do
 
   @doc """
   Compila um módulo através das fases:
-  3. Desugar -> 4. Macro Expansion -> 5. Type Check -> 6. Backend
+  3. Macro Expansion -> 4. Desugar -> 5. Type Check -> 6. Backend
   """
   def compile_module(module, mode, env, opts \\ []) do
     is_entry = Keyword.get(opts, :is_entry, module.name == (env.current_module || :__main__))
@@ -81,9 +86,9 @@ defmodule Pipeline do
           runtime_env: env.runtime_env
       }
 
-    with {:ok, desugared} <- Parser.Desugar.run(module),
-         {:ok, expanded, module_env} <- Midfield.MacroExpander.run(desugared, module_env),
-         {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(expanded, module_env),
+    with {:ok, expanded, module_env} <- Midfield.MacroExpander.run(module, module_env),
+         {:ok, desugared} <- Midfield.Desugar.run(expanded),
+         {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(desugared, module_env),
          {:ok, result, module_env} <- run_backend(mode, typed_ast, module_env) do
       {:ok, result, module_env}
     end
