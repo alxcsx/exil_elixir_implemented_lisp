@@ -71,7 +71,8 @@ defmodule Midfield.MacroExpanderTests do
       # (quote (+ 1 2))
       ast = lst([id(:quote), lst([id(:+), int(1), int(2)])])
 
-      assert {%AST.List{elements: [%AST.List{elements: [%AST.Identifier{name: :_ffi} | _]} | _]}, _env} =
+      assert {%AST.List{elements: [%AST.List{elements: [%AST.Identifier{name: :_ffi} | _]} | _]},
+              _env} =
                MacroExpander.expand(ast, env)
     end
 
@@ -348,6 +349,7 @@ defmodule Midfield.MacroExpanderTests do
       {nil, env} = MacroExpander.expand(macro, env)
 
       call = lst([id(:wrap_tup), int(42), tup([int(1), int(2)])])
+
       assert {%AST.Tuple{
                 elements: [
                   %AST.Literal{value: 42},
@@ -377,6 +379,7 @@ defmodule Midfield.MacroExpanderTests do
       {nil, env} = MacroExpander.expand(macro, env)
 
       call = lst([id(:wrap_map), int(99)])
+
       assert {%AST.Map{
                 pairs: [
                   {%AST.Literal{type: :Key, value: :result}, %AST.Literal{value: 99}}
@@ -403,6 +406,7 @@ defmodule Midfield.MacroExpanderTests do
 
       # Called with just 1 arg -> rest should be empty list/tuple
       call = lst([id(:var_m), int(10)])
+
       assert {%AST.Tuple{
                 elements: [
                   %AST.Literal{value: 10},
@@ -420,7 +424,10 @@ defmodule Midfield.MacroExpanderTests do
           id(:"def-macro"),
           id(:fixed),
           tup([id(:a), id(:b)]),
-          lst([id(:quote), lst([id(:+), lst([id(:unquote), id(:a)]), lst([id(:unquote), id(:b)])])])
+          lst([
+            id(:quote),
+            lst([id(:+), lst([id(:unquote), id(:a)]), lst([id(:unquote), id(:b)])])
+          ])
         ])
 
       {nil, env} = MacroExpander.expand(macro, env)

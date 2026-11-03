@@ -106,8 +106,7 @@ defmodule Core.Type do
   end
 
   def substitute({:Fn, arguments, result}, substitutions) do
-    {:Fn, Enum.map(arguments, &substitute(&1, substitutions)),
-     substitute(result, substitutions)}
+    {:Fn, Enum.map(arguments, &substitute(&1, substitutions)), substitute(result, substitutions)}
   end
 
   def substitute({:Union, types}, substitutions),

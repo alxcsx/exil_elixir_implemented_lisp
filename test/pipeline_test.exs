@@ -180,12 +180,15 @@ defmodule PipelineTest do
            ] = main_body("(quote (def a 1))")
 
     assert {:ok, [quoted_def], _} = Pipeline.run("(quote (def a 1))")
-    assert %List{elements: [%Identifier{name: :def}, %Identifier{name: :a}, %Literal{value: 1}]} = quoted_def
+
+    assert %List{elements: [%Identifier{name: :def}, %Identifier{name: :a}, %Literal{value: 1}]} =
+             quoted_def
   end
 
   test "quote evaluates at runtime to first-class AST data structures" do
     assert {:ok, [%Identifier{name: :hello}], _} = Pipeline.run("(quote hello)")
     assert {:ok, [%Literal{type: :Int, value: 42}], _} = Pipeline.run("(quote 42)")
+
     assert {:ok, [%Tuple{elements: [%Literal{value: 1}, %Literal{value: 2}]}], _} =
              Pipeline.run("(quote [1 2])")
 
@@ -193,7 +196,10 @@ defmodule PipelineTest do
     (def code (quote (+ 10 20)))
     code
     """
-    assert {:ok, [%List{elements: [%Identifier{name: :+}, %Literal{value: 10}, %Literal{value: 20}]}], _} =
+
+    assert {:ok,
+            [%List{elements: [%Identifier{name: :+}, %Literal{value: 10}, %Literal{value: 20}]}],
+            _} =
              Pipeline.run(code)
   end
 
@@ -318,6 +324,7 @@ defmodule PipelineTest do
       (defn add [x y] (+ x y))
       (add 10 32)
       """
+
       assert {:ok, [42], _} = Pipeline.run(code)
     end
 
@@ -329,6 +336,7 @@ defmodule PipelineTest do
           (* y 2)))
       (calculate 5)
       """
+
       assert {:ok, [30], _} = Pipeline.run(code)
     end
 
@@ -337,6 +345,7 @@ defmodule PipelineTest do
       (defn collect [head | tail] [head tail])
       (collect 1 2 3)
       """
+
       assert {:ok, [{1, [2, 3]}], _} = Pipeline.run(code)
     end
 
@@ -346,6 +355,7 @@ defmodule PipelineTest do
         (if (<= n 1) 1 (* n (fact (- n 1)))))
       (fact 5)
       """
+
       assert {:ok, [120], _} = Pipeline.run(code)
     end
 
@@ -355,6 +365,7 @@ defmodule PipelineTest do
       (defn double [x] (+ x x))
       (double 21)
       """
+
       assert {:ok, [42], _} = Pipeline.run(code)
     end
 
@@ -382,7 +393,9 @@ defmodule PipelineTest do
         (>= 4 5)
       )
       """
-      assert {:ok, [[true, false, true, false, true, true, false, true, true, false]], _} = Pipeline.run(code)
+
+      assert {:ok, [[true, false, true, false, true, true, false, true, true, false]], _} =
+               Pipeline.run(code)
     end
 
     test "structural equality on nested structures" do
@@ -393,6 +406,7 @@ defmodule PipelineTest do
         (== :nil :false)
       )
       """
+
       assert {:ok, [[true, false, false]], _} = Pipeline.run(code)
     end
   end

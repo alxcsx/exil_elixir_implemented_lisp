@@ -11,7 +11,8 @@ defmodule Midfield.TypeCheckerTest do
     prelude = %{Pipeline.base_env() | current_module: :__main__}
     module_env = Env.new(prelude)
 
-    with {:ok, expanded, env} <- MacroExpander.run(%AST.Module{name: :__main__, body: forms}, module_env),
+    with {:ok, expanded, env} <-
+           MacroExpander.run(%AST.Module{name: :__main__, body: forms}, module_env),
          {:ok, desugared} <- Desugar.run(expanded) do
       TypeChecker.run(desugared, env)
     end
@@ -66,7 +67,12 @@ defmodule Midfield.TypeCheckerTest do
       assert_error("(fn [1] 1)", "parâmetros devem ser identificadores")
       assert_error("(fn [def] def)", "identificador reservado def")
       assert_error("(fn [Int] Int)", "identificador reservado Int")
-      assert_error("(def-type Custom Int) (fn [Custom] Custom)", "nome de variável coincide com tipo: Custom")
+
+      assert_error(
+        "(def-type Custom Int) (fn [Custom] Custom)",
+        "nome de variável coincide com tipo: Custom"
+      )
+
       assert_error("(fn [x] x) x", "identificador não declarado: x")
     end
 
@@ -87,7 +93,13 @@ defmodule Midfield.TypeCheckerTest do
   describe "aridade e chamadas" do
     test "o pipeline disponibiliza operações aritméticas no ambiente pai" do
       assert {:ok, _results, env} = Pipeline.run("(+ 1 2)")
-      assert %{type: {:Fn, [{:Union, [:Int, :Float]}, {:Union, [:Int, :Float]}], {:Union, [:Int, :Float]}}, arity: 2} = Env.get_var(env, :+)
+
+      assert %{
+               type:
+                 {:Fn, [{:Union, [:Int, :Float]}, {:Union, [:Int, :Float]}],
+                  {:Union, [:Int, :Float]}},
+               arity: 2
+             } = Env.get_var(env, :+)
     end
 
     test "operações aritméticas aceitam exatamente dois argumentos" do
@@ -435,6 +447,7 @@ defmodule Midfield.TypeCheckerTest do
       (def f (fn [a | rest] a))
       (f 42)
       """
+
       assert {:ok, _module, _env} = check(source)
     end
 
@@ -445,6 +458,7 @@ defmodule Midfield.TypeCheckerTest do
       (def make-box (fn [x] {:value x}))
       (make-box 10)
       """
+
       assert {:ok, _module, env} = check(source)
       assert is_map(env.vars)
     end

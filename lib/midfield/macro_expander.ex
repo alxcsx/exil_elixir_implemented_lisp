@@ -71,14 +71,10 @@ defmodule Midfield.MacroExpander do
   end
 
   def expand(%List{elements: [%Identifier{name: :unquote} | _]} = node, _env, _depth),
-    do:
-      raise("unquote só pode ser usado dentro de quote na linha #{line_of(node.meta)}")
+    do: raise("unquote só pode ser usado dentro de quote na linha #{line_of(node.meta)}")
 
   def expand(%List{elements: [%Identifier{name: :"unquote-splicing"} | _]} = node, _env, _depth),
-    do:
-      raise(
-        "unquote-splicing só pode ser usado dentro de quote na linha #{line_of(node.meta)}"
-      )
+    do: raise("unquote-splicing só pode ser usado dentro de quote na linha #{line_of(node.meta)}")
 
   def expand(%List{elements: [%Identifier{name: :import}, %Identifier{name: mod}]}, env, _depth) do
     new_env = Env.import_module(env, mod)
@@ -269,7 +265,8 @@ defmodule Midfield.MacroExpander do
   defp expand_macro_body(%AST.Map{pairs: pairs} = node, env) do
     %AST.Map{
       node
-      | pairs: Enum.map(pairs, fn {k, v} -> {expand_macro_body(k, env), expand_macro_body(v, env)} end)
+      | pairs:
+          Enum.map(pairs, fn {k, v} -> {expand_macro_body(k, env), expand_macro_body(v, env)} end)
     }
   end
 
@@ -283,7 +280,10 @@ defmodule Midfield.MacroExpander do
     raise "unquote deve receber exatamente um parâmetro na linha #{line_of(meta)}"
   end
 
-  defp compile_quote(%List{elements: [%Identifier{name: :"unquote-splicing"} | _], meta: meta}, _env) do
+  defp compile_quote(
+         %List{elements: [%Identifier{name: :"unquote-splicing"} | _], meta: meta},
+         _env
+       ) do
     raise "unquote-splicing inválido na linha #{line_of(meta)}"
   end
 

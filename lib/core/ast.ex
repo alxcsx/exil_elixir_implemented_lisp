@@ -53,7 +53,9 @@ defmodule Core.AST do
   def call(head, args, meta \\ %{}) do
     args_list =
       case args do
-        [single] when is_list(single) or is_tuple(single) or is_struct(single, List) or is_struct(single, Tuple) ->
+        [single]
+        when is_list(single) or is_tuple(single) or is_struct(single, List) or
+               is_struct(single, Tuple) ->
           to_elements(single)
 
         other ->

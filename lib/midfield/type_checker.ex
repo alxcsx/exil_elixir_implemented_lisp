@@ -20,7 +20,8 @@ defmodule Midfield.TypeChecker do
   ]
   @primitive_types Type.primitive_types()
   @type_operators [:U, :&]
-  @reserved_names @compiler_keywords ++ @collection_names ++ @special_forms ++ @primitive_types ++ @type_operators
+  @reserved_names @compiler_keywords ++
+                    @collection_names ++ @special_forms ++ @primitive_types ++ @type_operators
   @unknown_binding %{type: :Any, arity: :unknown}
   @list_binding %{type: :Any, arity: :variadic}
 
@@ -160,7 +161,8 @@ defmodule Midfield.TypeChecker do
   end
 
   defp check(
-         %List{elements: [%Identifier{name: :let} = head, %Tuple{elements: []} = tup | body]} = node,
+         %List{elements: [%Identifier{name: :let} = head, %Tuple{elements: []} = tup | body]} =
+           node,
          env,
          _scope
        ) do
@@ -194,7 +196,12 @@ defmodule Midfield.TypeChecker do
           with {:ok, rewritten_pairs, let_env} <- check_let_bindings(pairs, env, Env.new(env), []),
                {:ok, rewritten_body, _} <- check_sequence(body, let_env, :local) do
             flat_bindings = Enum.flat_map(rewritten_pairs, fn {k, v} -> [k, v] end)
-            {:ok, %List{node | elements: [head, %Tuple{tup | elements: flat_bindings} | rewritten_body]}, env}
+
+            {:ok,
+             %List{
+               node
+               | elements: [head, %Tuple{tup | elements: flat_bindings} | rewritten_body]
+             }, env}
           end
       end
     end
@@ -390,10 +397,11 @@ defmodule Midfield.TypeChecker do
   end
 
   defp find_duplicate_bindings(identifiers) do
-    names = Enum.map(identifiers, fn
-      %Identifier{name: n} -> n
-      _ -> nil
-    end)
+    names =
+      Enum.map(identifiers, fn
+        %Identifier{name: n} -> n
+        _ -> nil
+      end)
 
     valid_names = Enum.reject(names, &is_nil/1)
 
@@ -528,7 +536,9 @@ defmodule Midfield.TypeChecker do
   end
 
   defp binding_for(
-         %List{elements: [%Identifier{name: :fn}, %Tuple{elements: params, meta: tmeta} = tup | body]},
+         %List{
+           elements: [%Identifier{name: :fn}, %Tuple{elements: params, meta: tmeta} = tup | body]
+         },
          env
        ) do
     result =
@@ -913,7 +923,12 @@ defmodule Midfield.TypeChecker do
   end
 
   defp check_declared_value(
-         %List{elements: [%Identifier{name: :fn} = head, %Tuple{elements: params, meta: tmeta} = tup | body]} = node,
+         %List{
+           elements: [
+             %Identifier{name: :fn} = head,
+             %Tuple{elements: params, meta: tmeta} = tup | body
+           ]
+         } = node,
          env,
          %{args: argument_types, result: result_type},
          meta

@@ -78,7 +78,13 @@ defmodule Midfield.DesugarTest do
       }
 
       assert {:ok, %Module{name: :Sample, body: [desugared_fn]}} = Desugar.run(mod)
-      assert %List{elements: [%Identifier{name: :fn}, %Tuple{elements: [_, _], meta: %{variadic: 1}} | _]} =
+
+      assert %List{
+               elements: [
+                 %Identifier{name: :fn},
+                 %Tuple{elements: [_, _], meta: %{variadic: 1}} | _
+               ]
+             } =
                desugared_fn
     end
   end

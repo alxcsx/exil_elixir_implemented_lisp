@@ -82,12 +82,23 @@ defmodule REPL do
   defp count_brackets([?; | rest], counts, :normal), do: count_brackets(rest, counts, :comment)
   defp count_brackets([?" | rest], counts, :normal), do: count_brackets(rest, counts, :string)
 
-  defp count_brackets([?( | rest], {p, b, c}, :normal), do: count_brackets(rest, {p + 1, b, c}, :normal)
-  defp count_brackets([?) | rest], {p, b, c}, :normal), do: count_brackets(rest, {p - 1, b, c}, :normal)
-  defp count_brackets([?[ | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b + 1, c}, :normal)
-  defp count_brackets([?] | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b - 1, c}, :normal)
-  defp count_brackets([?{ | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b, c + 1}, :normal)
-  defp count_brackets([?} | rest], {p, b, c}, :normal), do: count_brackets(rest, {p, b, c - 1}, :normal)
+  defp count_brackets([?( | rest], {p, b, c}, :normal),
+    do: count_brackets(rest, {p + 1, b, c}, :normal)
+
+  defp count_brackets([?) | rest], {p, b, c}, :normal),
+    do: count_brackets(rest, {p - 1, b, c}, :normal)
+
+  defp count_brackets([?[ | rest], {p, b, c}, :normal),
+    do: count_brackets(rest, {p, b + 1, c}, :normal)
+
+  defp count_brackets([?] | rest], {p, b, c}, :normal),
+    do: count_brackets(rest, {p, b - 1, c}, :normal)
+
+  defp count_brackets([?{ | rest], {p, b, c}, :normal),
+    do: count_brackets(rest, {p, b, c + 1}, :normal)
+
+  defp count_brackets([?} | rest], {p, b, c}, :normal),
+    do: count_brackets(rest, {p, b, c - 1}, :normal)
 
   defp count_brackets([_ | rest], counts, :normal), do: count_brackets(rest, counts, :normal)
 end

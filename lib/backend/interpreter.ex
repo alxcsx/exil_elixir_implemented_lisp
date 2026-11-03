@@ -222,6 +222,7 @@ defmodule Backend.Interpreter do
         if mod == Core.AST,
           do: args,
           else: Enum.map(args, &unwrap_literal/1)
+
       apply(mod, fun, args)
     end
 
@@ -303,6 +304,7 @@ defmodule Backend.Interpreter do
       true ->
         {:arity, actual_arity} = :erlang.fun_info(callee, :arity)
         line = if is_map(meta), do: Map.get(meta, :line, "?"), else: "?"
+
         raise "aridade incorreta na linha #{line}: esperado #{actual_arity}, recebido #{length(evaluated_args)}"
     end
   end
