@@ -24,3 +24,5 @@ erl_crash.dump
 typed_lisp-*.tar
 
 typed_lisp
+.pi/
+
