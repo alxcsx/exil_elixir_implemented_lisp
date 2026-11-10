@@ -67,5 +67,62 @@ defmodule Parser.LexerTest do
                   {:")", 2}
                 ]}
     end
+
+    test "handles comment at end of input without trailing newline" do
+      code = "42 ; comment without newline"
+
+      assert Lexer.run(code) ==
+               {:ok,
+                [
+                  {:integer, 1, 42}
+                ]}
+    end
+
+    test "tokenizes empty collections and empty string" do
+      code = "() [] {} \"\""
+
+      assert Lexer.run(code) ==
+               {:ok,
+                [
+                  {:"(", 1},
+                  {:")", 1},
+                  {:"[", 1},
+                  {:"]", 1},
+                  {:"{", 1},
+                  {:"}", 1},
+                  {:string, 1, ""}
+                ]}
+    end
+
+    test "handles tokens adjacent to delimiters without spaces" do
+      code = "(f[x]{:a 1})"
+
+      assert Lexer.run(code) ==
+               {:ok,
+                [
+                  {:"(", 1},
+                  {:identifier, 1, "f"},
+                  {:"[", 1},
+                  {:identifier, 1, "x"},
+                  {:"]", 1},
+                  {:"{", 1},
+                  {:symbol, 1, :a},
+                  {:integer, 1, 1},
+                  {:"}", 1},
+                  {:")", 1}
+                ]}
+    end
+
+    test "raises on unterminated string" do
+      assert_raise RuntimeError, ~r/string não fechada/, fn ->
+        Lexer.run("\"unfinished string")
+      end
+    end
+
+    test "raises on colon alone" do
+      assert_raise RuntimeError, ~r/':' sozinho na linha/, fn ->
+        Lexer.run(":")
+      end
+    end
   end
 end

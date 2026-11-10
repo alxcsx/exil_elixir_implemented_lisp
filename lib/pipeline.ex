@@ -1,57 +1,94 @@
 defmodule Pipeline do
   @moduledoc """
-  Orquestra a compilação.
+  Orquestra o pipeline de compilação:
 
-  `run/2` recebe a fonte e as opções (`:env`, `:mode`, `:root`, `:std`).
-  O arquivo da fonte e o módulo corrente vêm do env; sem arquivo, a fonte
-  é um script com raiz no cwd.
+      Código Fonte
+          │
+          ▼  1. Parse (Parser.Lexer -> Parser.SyntaxAnalyzer)
+      AST Bruta
+          │
+          ▼  2. Module Identification (Midfield.ModuleManager)
+      Módulos & Plano de Compilação
+          │
+          ▼  3. Macro Expansion (Midfield.MacroExpander)
+      AST Expandida
+          │
+          ▼  4. Desugar (Midfield.Desugar)
+      AST Normalizada
+          │
+          ▼  5. Type Check (Midfield.TypeChecker)
+      AST Tipada
+          │
+          ▼  6. Backend (Backend.Interpreter / Backend.CodeGen)
+      Resultado da Execução / Bytecode
   """
 
   alias Core.Env
 
-  @arithmetic_names [:+, :-, :*, :/, :**]
-  @arithmetic_binding %{type: :Any, arity: 2}
+  @default_std Path.expand("stdlib", __DIR__)
+  @prelude_file Path.join(@default_std, "prelude.exl")
+
+  def base_env do
+    base_compile_env = %{
+      Env.new(macro_engine: &Backend.Interpreter.eval_sequence/2)
+      | runtime_env: %Core.RuntimeEnv{}
+    }
+
+    {:ok, _, env} =
+      run_file(@prelude_file, env: base_compile_env, std: nil)
+
+    env
+  end
 
   def run(source), do: run(source, [])
 
   def run(source, opts) when is_list(opts) do
-    env = Keyword.get(opts, :env, Env.new())
+    opts = Keyword.put_new(opts, :std, default_std())
+    env = Keyword.get_lazy(opts, :env, &base_env/0)
     mode = Keyword.get(opts, :mode, :interpret)
 
-    with {:ok, plan, env} <- Midfield.ModuleManager.load_plan(source, env, opts) do
-      case compile_plan(plan, mode, env) do
-        {:ok, results, env} -> {:ok, results, %{env | file: nil}}
-        {:error, _} = error -> error
-      end
+    with {:ok, forms} <- Parser.parse(source),
+         {:ok, plan, env} <- Midfield.ModuleManager.build_plan(forms, env, opts),
+         {:ok, results, env} <- compile_plan(plan, mode, env) do
+      {:ok, results, %{env | file: nil}}
     end
   end
 
   @doc "Lê o arquivo e compila com o env apontando para ele."
   def run_file(path, opts \\ []) do
     path = Path.expand(path)
+    opts = Keyword.put_new(opts, :std, default_std())
 
     with {:ok, source} <- File.read(path) do
-      env = Keyword.get(opts, :env, Env.new())
+      env = Keyword.get_lazy(opts, :env, &base_env/0)
       run(source, Keyword.put(opts, :env, %{env | file: path}))
     end
   end
 
-  @doc "Compila um módulo; devolve {:ok, resultado, env} ou {:error, motivo}."
-  def compile_module(module, mode, env) do
-    prelude_env =
+  defp default_std do
+    if File.dir?(@default_std), do: @default_std, else: nil
+  end
+
+  @doc """
+  Compila um módulo através das fases:
+  3. Macro Expansion -> 4. Desugar -> 5. Type Check -> 6. Backend
+  """
+  def compile_module(module, mode, env, opts \\ []) do
+    is_entry = Keyword.get(opts, :is_entry, module.name == (env.current_module || :__main__))
+
+    module_env =
       %{
         Env.new(env)
         | current_module: module.name,
           file: module.meta[:file],
-          imports: [],
-          aliases: %{}
+          imports: if(is_entry, do: env.imports, else: []),
+          aliases: if(is_entry, do: env.aliases, else: %{}),
+          runtime_env: env.runtime_env
       }
-      |> with_arithmetic()
-
-    module_env = Env.new(prelude_env)
 
     with {:ok, expanded, module_env} <- Midfield.MacroExpander.run(module, module_env),
-         {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(expanded, module_env),
+         {:ok, desugared} <- Midfield.Desugar.run(expanded),
+         {:ok, typed_ast, module_env} <- Midfield.TypeChecker.run(desugared, module_env),
          {:ok, result, module_env} <- run_backend(mode, typed_ast, module_env) do
       {:ok, result, module_env}
     end
@@ -59,37 +96,44 @@ defmodule Pipeline do
 
   # --  Helpers
 
-  defp with_arithmetic(env) do
-    Enum.reduce(@arithmetic_names, env, fn name, current_env ->
-      if Env.get_def(current_env, name) do
-        current_env
-      else
-        Env.put_def(current_env, name, @arithmetic_binding)
+  defp compile_plan(plan, mode, env) do
+    entry_module =
+      case List.last(plan) do
+        {%Core.AST.Module{name: name}, _} -> name
+        _ -> env.current_module || :__main__
+      end
+
+    Enum.reduce_while(plan, {:ok, [], env}, fn {module, path}, {:ok, acc, current_env} ->
+      is_entry = module.name == entry_module
+
+      case compile_module(module, mode, current_env, is_entry: is_entry) do
+        {:ok, result, mod_env} ->
+          new_env =
+            if is_entry do
+              mod_env
+            else
+              %{
+                mod_env
+                | current_module: current_env.current_module,
+                  file: current_env.file,
+                  imports: current_env.imports,
+                  aliases: current_env.aliases
+              }
+            end
+
+          new_env = Env.mark_defined(new_env, module.name)
+          new_env = if path, do: Env.mark_loaded(new_env, path), else: new_env
+          {:cont, {:ok, [result | acc], new_env}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
-  end
-
-  defp compile_plan(plan, mode, env) do
-    result =
-      Enum.reduce_while(plan, {:ok, [], env}, fn {module, path}, {:ok, results, env} ->
-        case compile_module(module, mode, env) do
-          {:ok, result, env} ->
-            env = env |> Env.mark_defined(module.name) |> mark_loaded(path)
-            {:cont, {:ok, [result | results], env}}
-
-          {:error, _} = error ->
-            {:halt, error}
-        end
-      end)
-
-    case result do
+    |> case do
       {:ok, results, env} -> {:ok, Enum.reverse(results), env}
       {:error, _} = error -> error
     end
   end
-
-  defp mark_loaded(env, nil), do: env
-  defp mark_loaded(env, path), do: Env.mark_loaded(env, path)
 
   defp run_backend(:interpret, ast, env), do: Backend.Interpreter.run(ast, env)
   defp run_backend(:compile, ast, env), do: Backend.CodeGen.run(ast, env)

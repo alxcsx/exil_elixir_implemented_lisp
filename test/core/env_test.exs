@@ -8,7 +8,6 @@ defmodule Core.EnvTest do
       assert env.vars == %{}
       assert env.types == %{}
       assert env.macros == %{}
-      assert env.vars == %{}
       assert env.parent == nil
     end
 
