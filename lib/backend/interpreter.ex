@@ -1,6 +1,6 @@
 defmodule Backend.Interpreter do
   @moduledoc """
-  Interpretador simples para TypedLisp.
+  Interpretador simples para Exil.
 
   Avalia a AST pós-expansão/anotação e serve de motor de avaliação
   em tempo de compilação para o sistema de macros e execução no REPL.

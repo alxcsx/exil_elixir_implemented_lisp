@@ -6,7 +6,7 @@ defmodule Midfield.ModuleManagerTest do
   alias Midfield.ModuleManager
 
   defp write_tree(files) do
-    dir = Path.join(System.tmp_dir!(), "typed_lisp_#{System.unique_integer([:positive])}")
+    dir = Path.join(System.tmp_dir!(), "exil_#{System.unique_integer([:positive])}")
 
     Enum.each(files, fn {rel, source} ->
       path = Path.join(dir, rel)

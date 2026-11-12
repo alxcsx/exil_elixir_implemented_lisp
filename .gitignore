@@ -21,8 +21,8 @@ erl_crash.dump
 *.ez
 
 # Ignore package tarball (built via "mix hex.build").
-typed_lisp-*.tar
+exil-*.tar
 
-typed_lisp
+exil
 .pi/
 

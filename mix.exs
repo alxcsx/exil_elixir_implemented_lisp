@@ -1,9 +1,9 @@
-defmodule TypedLisp.MixProject do
+defmodule Exil.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :typed_lisp,
+      app: :exil,
       version: "0.1.0",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
