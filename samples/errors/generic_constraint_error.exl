@@ -1,0 +1,11 @@
+;; =============================================================================
+;; Erro de Tipagem: Violação de Variável de Tipo Genérica
+;; Execute com: ./exil samples/errors/generic_constraint_error.exl
+;; =============================================================================
+
+;; A spec exige que o primeiro e o segundo argumento tenham o mesmo tipo T
+(spec comparar (<> T (-> [T T] Bool)))
+(def comparar (fn [a b] (== a b)))
+
+;; Passar um Int e uma Str viola a consistência do parâmetro T
+(comparar 42 "quarenta-e-dois")

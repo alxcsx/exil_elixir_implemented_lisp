@@ -1,0 +1,33 @@
+;; =============================================================================
+;; Módulos, Importação e Funções Tipadas
+;; Execute com: ./exil samples/modules.exl
+;; =============================================================================
+
+;; Módulo matemático com specs
+(def-module Math
+  (spec soma (-> [Num Num] Num))
+  (def soma (fn [a b] (+ a b)))
+
+  (spec dobro (-> [Num] Num))
+  (def dobro (fn [x] (* x 2))))
+
+;; Módulo geométrico que importa Math e anota suas próprias funções
+(def-module Geometria
+  (import Math)
+
+  (spec area-retangulo (-> [Num Num] Num))
+  (def area-retangulo (fn [base altura] (* base altura)))
+
+  (spec perimetro-quadrado (-> [Num] Num))
+  (def perimetro-quadrado (fn [lado] (dobro (soma lado lado)))))
+
+;; Importação direta e importação com alias
+(import Math)
+(import Geometria as Geo)
+
+;; Chamadas tipadas diretas e qualificadas
+(def total (soma 10 5))
+(def perimetro (Geo/perimetro-quadrado 4))
+(def area (Geo/area-retangulo 3 7))
+
+[total perimetro area]

@@ -1,0 +1,43 @@
+;; =============================================================================
+;; Funções, Closures e Escopos com Tipagem Estática
+;; Execute com: ./exil samples/functions.exl
+;; =============================================================================
+
+;; Tipo de função que recebe Num e retorna Num
+(def-type Transformador (-> [Num] Num))
+
+;; Função anotada com spec
+(spec soma (-> [Num Num] Num))
+(def soma (fn [a b] (+ a b)))
+
+;; Função de dobra também tipada
+(spec dobro (-> [Num] Num))
+(def dobro (fn [x] (* x 2)))
+
+;; Closure: fábrica de funções que retorna um Transformador
+(spec criar-multiplicador (-> [Num] Transformador))
+(def criar-multiplicador
+  (fn [fator]
+    (fn [numero] (* numero fator))))
+
+(def triplo (criar-multiplicador 3))
+
+;; Função de alta ordem: recebe uma função Transformador e um valor Num
+(spec aplicar-duas-vezes (-> [Transformador Num] Num))
+(def aplicar-duas-vezes
+  (fn [f valor]
+    (f (f valor))))
+
+;; Aridade variável: usando | para capturar argumentos restantes
+(defn cabeca-e-cauda [primeiro | resto]
+  [primeiro resto])
+
+;; Execução e testes
+(def r-soma (soma 10 5))
+(def r-dobro (dobro 7))
+(def r-triplo (triplo 5))
+(def r-aplicar (aplicar-duas-vezes dobro 4))
+(def r-resto (cabeca-e-cauda 1 2 3 4 5))
+
+;; Retorno consolidado
+[r-soma r-dobro r-triplo r-aplicar r-resto]

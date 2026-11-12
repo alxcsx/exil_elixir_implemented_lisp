@@ -1,0 +1,56 @@
+;; =============================================================================
+;; Sistema Completo de Tipos Estáticos, Specs e Subtipagem em Exil
+;; Execute com: ./exil samples/types.exl
+;; =============================================================================
+
+;; 1. Aliases e Tipos Primitivos / Uniões (U)
+(def-type Status (U :ok :erro :pendente))
+(def-type Identificador (U Int Str))
+
+;; 2. Tipos Parametrizados Genéricos
+(def-type (Par [A B]) [A B])
+(def-type (Caixa [T]) {:conteudo T})
+
+;; 3. Tipos Estruturais com Mapas (Records)
+(def-type Localizavel {:x Int :y Int})
+(def-type Colorivel {:cor Str})
+
+;; 4. Tipos de Interseção (&) combinando múltiplos contratos estruturais
+(def-type PontoColorido (& Localizavel Colorivel))
+
+;; 5. Função Genérica com spec anotado (<> declara variáveis de tipo)
+(spec identidade (<> [T] (-> [T] T)))
+(def identidade (fn [x] x))
+
+;; 6. Função de Alta Ordem com Tipo de Função como Argumento
+(spec aplicar (-> [(-> [Num] Num) Num] Num))
+(def aplicar (fn [f val] (f val)))
+
+;; 7. Função com Coleções Tipadas: Lista de Inteiros
+(spec tamanho-amostra (-> [(List Int)] Num))
+(def tamanho-amostra (fn [itens] 42))
+
+;; 8. Função que exige o tipo de interseção PontoColorido
+(spec renderizar-ponto (-> [PontoColorido] Str))
+(def renderizar-ponto (fn [p] "ponto renderizado com sucesso"))
+
+;; 9. Verificação Estática de Subtipagem com o operador <:
+;; Mapa com campos extras ({:x Int :y Int :z Int}) é subtipo de {:x Int :y Int}
+(def sub-mapa? (<: {:x Int :y Int :z Int} {:x Int :y Int}))
+
+;; PontoColorido satisfaz Localizavel
+(def ponto-e-localizavel? (<: PontoColorido Localizavel))
+
+;; 10. Checagem Dinâmica em Tempo de Execução com instance-of?
+(def inteiro? (instance-of? 100 Int))
+(def string? (instance-of? "texto" Str))
+(def status? (instance-of? :ok Status))
+
+;; Testando as funções tipadas
+(def r-id (identidade "generico-str"))
+(def r-aplicar (aplicar (fn [x] (* x 3)) 10))
+(def r-lista (tamanho-amostra (list 1 2 3 4)))
+(def r-ponto (renderizar-ponto {:x 10 :y 20 :cor "vermelho"}))
+
+;; Retorno consolidado
+[sub-mapa? ponto-e-localizavel? inteiro? string? status? r-id r-aplicar r-lista r-ponto]

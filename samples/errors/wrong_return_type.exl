@@ -1,0 +1,12 @@
+;; =============================================================================
+;; Erro de Tipagem: Tipo de Retorno Não Corresponde à Spec
+;; Execute com: ./exil samples/errors/wrong_return_type.exl
+;; =============================================================================
+
+;; A spec promete retorno Int
+(spec obter-pontuacao (-> [Str] Int))
+
+;; O corpo da função retorna uma Str
+(def obter-pontuacao
+  (fn [nome]
+    "cem"))

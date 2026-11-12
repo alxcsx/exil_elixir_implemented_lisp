@@ -1,0 +1,36 @@
+;; =============================================================================
+;; Operações Básicas e Tipos Primitivos em Exil
+;; Execute com: ./exil samples/basics.exl
+;; =============================================================================
+
+;; Literais primitivos: inteiros, decimais, strings e booleanos
+(def inteiro 42)
+(def decimal 3.14)
+(def texto "Linguagem Exil")
+(def verdadeiro :true)
+
+;; Operadores aritméticos (+, -, *, / com divisão inteira, ** potência)
+(def soma (+ 10 5))
+(def subtracao (- 20 8))
+(def multiplicacao (* 6 7))
+(def divisao (/ 100 4))
+(def potencia (** 2 8))
+
+;; Operadores relacionais e de comparação (==, !=, <, >, <=, >=)
+(def comparacao-igual (== 10 10))
+(def comparacao-maior (> 15 8))
+
+;; Operador lógico not
+(def negacao (not (== 1 2)))
+
+;; Condicional if com avaliação preguiçosa (short-circuit)
+(def status (if comparacao-igual "igual" "diferente"))
+
+;; Escopo léxico local sequencial com let
+(def calculo-local
+  (let [base 10
+        altura 5
+        area (* base altura)]
+    area))
+
+[soma subtracao multiplicacao divisao potencia status calculo-local]

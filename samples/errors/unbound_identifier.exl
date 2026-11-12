@@ -1,0 +1,9 @@
+;; =============================================================================
+;; Erro de Compilação: Identificador Não Declarado
+;; Execute com: ./exil samples/errors/unbound_identifier.exl
+;; =============================================================================
+
+(def a 10)
+
+;; Tentativa de usar variável não declarada
+(+ a variavel_inexistente)

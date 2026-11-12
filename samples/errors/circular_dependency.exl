@@ -1,0 +1,20 @@
+;; =============================================================================
+;; Erro de Compilação: Dependência Circular entre Módulos
+;; Execute com: ./exil samples/errors/circular_dependency.exl
+;; =============================================================================
+
+;; Exemplo clássico onde Even depende de Odd e Odd depende de Even.
+;; O compilador rejeita ciclos de importação para garantir um grafo acíclico.
+(def-module Even
+  (import Odd)
+  (defn is-even [n]
+    (if (== n 0)
+        :true
+        (is-odd (- n 1)))))
+
+(def-module Odd
+  (import Even)
+  (defn is-odd [n]
+    (if (== n 0)
+        :false
+        (is-even (- n 1)))))

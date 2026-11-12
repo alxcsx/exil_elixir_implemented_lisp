@@ -1,0 +1,11 @@
+;; =============================================================================
+;; Erro de Tipagem: Tipo de Argumento Incompatível
+;; Execute com: ./exil samples/errors/wrong_argument_type.exl
+;; =============================================================================
+
+;; A função 'dobro' exige um argumento do tipo Int
+(spec dobro (-> [Int] Num))
+(def dobro (fn [x] (* x 2)))
+
+;; Chamada inválida passando uma String em vez de Int
+(dobro "texto-invalido")

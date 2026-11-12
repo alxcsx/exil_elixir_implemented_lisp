@@ -1,0 +1,9 @@
+;; =============================================================================
+;; Erro de Tipagem: Tentativa de Chamar Valor Não Chamável
+;; Execute com: ./exil samples/errors/calling_non_function.exl
+;; =============================================================================
+
+(def resposta 42)
+
+;; resposta é um Int, portanto não pode ser invocado como função
+(resposta 10)

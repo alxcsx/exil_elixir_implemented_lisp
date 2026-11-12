@@ -1,0 +1,12 @@
+;; =============================================================================
+;; Erro de Tipagem: Valor Fora da União Declarada
+;; Execute com: ./exil samples/errors/union_type_mismatch.exl
+;; =============================================================================
+
+(def-type Estado (U :ativo :inativo))
+
+(spec mudar-estado (-> [Estado] Str))
+(def mudar-estado (fn [e] "estado alterado"))
+
+;; O símbolo :cancelado não pertence à união (U :ativo :inativo)
+(mudar-estado :cancelado)

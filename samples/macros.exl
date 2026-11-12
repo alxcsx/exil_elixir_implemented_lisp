@@ -1,0 +1,27 @@
+;; =============================================================================
+;; Metaprogramação e Sistema de Macros em Exil
+;; Execute com: ./exil samples/macros.exl
+;; =============================================================================
+
+;; Macro 'unless': inverte a lógica do if (executa quando a condição for falsa)
+(def-macro unless [condicao entao senao]
+  (quote (if (unquote condicao) (unquote senao) (unquote entao))))
+
+;; Macro 'when': avalia o corpo apenas quando a condição for verdadeira
+(def-macro when [condicao corpo]
+  (quote (if (unquote condicao) (unquote corpo) :nil)))
+
+;; Macro 'inverter': inverte os operandos de uma chamada binária
+(def-macro inverter [op a b]
+  (quote ((unquote op) (unquote b) (unquote a))))
+
+;; Macro com unquote-splicing para expandir uma lista de argumentos
+(def-macro chamar-com-args [funcao args]
+  (quote ((unquote funcao) (unquote-splicing args))))
+
+;; Testando as macros expandidas em tempo de compilação
+(def r-unless (unless (== 10 20) "dez é diferente de vinte" "são iguais"))
+(def r-when (when (== 7 7) "sete é igual a sete"))
+(def r-inverter (inverter - 10 30))
+
+[r-unless r-when r-inverter]

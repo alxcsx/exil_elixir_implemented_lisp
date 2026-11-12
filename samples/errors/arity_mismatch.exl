@@ -1,0 +1,11 @@
+;; =============================================================================
+;; Erro de Compilação: Incompatibilidade de Aridade
+;; Execute com: ./exil samples/errors/arity_mismatch.exl
+;; =============================================================================
+
+;; A função soma espera exatamente 2 argumentos
+(defn soma [a b]
+  (+ a b))
+
+;; Chamada incorreta com 3 argumentos
+(soma 10 20 30)

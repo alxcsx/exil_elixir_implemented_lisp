@@ -1,0 +1,46 @@
+;; =============================================================================
+;; Algoritmos Recursivos com Assinaturas de Tipo (spec)
+;; Execute com: ./exil samples/recursion.exl
+;; =============================================================================
+
+;; Fatorial: recursão linear tipada
+(spec fatorial (-> [Num] Num))
+(def fatorial
+  (fn [n]
+    (if (== n 0)
+        1
+        (* n (fatorial (- n 1))))))
+
+;; Fibonacci: recursão em árvore
+(spec fibonacci (-> [Num] Num))
+(def fibonacci
+  (fn [n]
+    (if (<= n 1)
+        n
+        (+ (fibonacci (- n 1)) (fibonacci (- n 2))))))
+
+;; Somatório acumulado de 1 até n
+(spec somatorio (-> [Num] Num))
+(def somatorio
+  (fn [n]
+    (if (<= n 0)
+        0
+        (+ n (somatorio (- n 1))))))
+
+;; Verificação de paridade por redução em passos de 2
+(spec e-par? (-> [Num] Bool))
+(def e-par?
+  (fn [n]
+    (if (== n 0)
+        :true
+        (if (== n 1)
+            :false
+            (e-par? (- n 2))))))
+
+;; Execução dos testes tipados
+(def r-fatorial (fatorial 5))
+(def r-fibonacci (fibonacci 7))
+(def r-somatorio (somatorio 10))
+(def r-par8 (e-par? 8))
+
+[r-fatorial r-fibonacci r-somatorio r-par8]

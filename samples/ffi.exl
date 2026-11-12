@@ -1,0 +1,35 @@
+;; =============================================================================
+;; Interoperabilidade FFI com Elixir e Erlang
+;; Execute com: ./exil samples/ffi.exl
+;; =============================================================================
+
+;; FFI para módulo Elixir: String.upcase/1
+(spec para-maiusculas (-> [Str] Str))
+(def para-maiusculas (_ffi :Elixir.String :upcase 1))
+
+;; FFI para módulo Erlang: math.sqrt/1
+(spec raiz-quadrada (-> [Float] Float))
+(def raiz-quadrada (_ffi :math :sqrt 1))
+
+;; FFI para módulo Erlang: erlang.abs/1
+(spec valor-absoluto (-> [Int] Int))
+(def valor-absoluto (_ffi :erlang :abs 1))
+
+;; FFI para módulo Erlang: erlang.rem/2 (resto da divisão)
+(spec resto-divisao (-> [Int Int] Int))
+(def resto-divisao (_ffi :erlang :rem 2))
+
+;; FFI para saída no terminal: IO.puts/1
+(spec imprimir (-> [Any] Any))
+(def imprimir (_ffi :Elixir.IO :puts 1))
+
+;; Exibindo mensagem no console via FFI
+(imprimir ">>> Testando FFI no Exil <<<")
+
+;; Execução das funções integradas com a BEAM
+(def r-str (para-maiusculas "exil typed lisp"))
+(def r-raiz (raiz-quadrada 25.0))
+(def r-abs (valor-absoluto -99))
+(def r-rem (resto-divisao 17 5))
+
+[r-str r-raiz r-abs r-rem]

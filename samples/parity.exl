@@ -1,0 +1,51 @@
+;; =============================================================================
+;; Verificação de Paridade, Módulos e Recursão Mútua Tipada
+;; Execute com: ./exil samples/parity.exl
+;; =============================================================================
+
+;; 1. Módulos com hierarquia acíclica e specs
+(def-module Impar
+  (spec is-odd (-> [Num] Bool))
+  (def is-odd
+    (fn [n]
+      (if (== n 0)
+          :false
+          (if (== n 1)
+              :true
+              (is-odd (- n 2)))))))
+
+(def-module Par
+  (import Impar)
+
+  (spec is-even (-> [Num] Bool))
+  (def is-even
+    (fn [n]
+      (if (== n 0)
+          :true
+          (Impar/is-odd (- n 1))))))
+
+(import Impar)
+(import Par)
+
+;; 2. Recursão mútua passando a função complementar com assinatura Any
+(spec mut-even (-> [Num Any] Bool))
+(def mut-even
+  (fn [n odd-fn]
+    (if (== n 0)
+        :true
+        (odd-fn (- n 1) mut-even))))
+
+(spec mut-odd (-> [Num Any] Bool))
+(def mut-odd
+  (fn [n even-fn]
+    (if (== n 0)
+        :false
+        (even-fn (- n 1) mut-odd))))
+
+;; Testes de paridade tipada
+(def r-par4 (is-even 4))
+(def r-impar5 (is-odd 5))
+(def r-mut-par (mut-even 10 mut-odd))
+(def r-mut-impar (mut-odd 9 mut-even))
+
+[r-par4 r-impar5 r-mut-par r-mut-impar]

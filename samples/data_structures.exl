@@ -1,0 +1,45 @@
+;; =============================================================================
+;; Estruturas de Dados Tipadas: Listas, Tuplas e Mapas
+;; Execute com: ./exil samples/data_structures.exl
+;; =============================================================================
+
+;; Definição de tipos estruturais
+(def-type Coordenada3D [Float Float Float])
+(def-type Usuario {:id Int :nome Str :ativo Bool})
+(def-type Pedido {:codigo Str :total Num :itens (List Str)})
+
+;; Função tipada que recebe uma lista tipada de inteiros
+(spec somar-lista (-> [(List Int)] Num))
+(def somar-lista
+  (fn [itens]
+    (let [primeiro 10]
+      (+ primeiro 5))))
+
+;; Função tipada que valida e processa um mapa estrutural de usuário
+(spec validar-usuario (-> [Usuario] Str))
+(def validar-usuario
+  (fn [u]
+    "usuario-valido"))
+
+;; Instâncias concretas dos dados
+(def lista-numeros (list 1 2 3 4 5))
+(def lista-mista (list "item" 42 :ok))
+(def par-resultado [:ok 200])
+(def ponto [12.5 30.0 5.0])
+
+(def usuario-ana
+  {:id 101
+   :nome "Ana Silva"
+   :ativo :true})
+
+(def pedido-exemplo
+  {:codigo "PED-123"
+   :total 45
+   :itens (list "caneta" "caderno")})
+
+;; Chamadas tipadas
+(def r-soma-lista (somar-lista (list 1 2 3)))
+(def r-validacao (validar-usuario usuario-ana))
+
+;; Retorno consolidado
+[lista-numeros par-resultado ponto usuario-ana pedido-exemplo r-soma-lista r-validacao]

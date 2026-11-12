@@ -1,0 +1,13 @@
+;; =============================================================================
+;; Erro de Tipagem: Falha em Tipo Estrutural (Campos Faltando no Mapa)
+;; Execute com: ./exil samples/errors/structural_type_mismatch.exl
+;; =============================================================================
+
+;; Tipo Usuario exige os campos :id e :nome
+(def-type Usuario {:id Int :nome Str})
+
+(spec saudar (-> [Usuario] Str))
+(def saudar (fn [u] "ola"))
+
+;; Chamada inválida: o mapa fornecido não possui a chave obrigatória :nome
+(saudar {:id 42})
